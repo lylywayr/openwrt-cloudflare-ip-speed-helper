@@ -202,7 +202,17 @@ restore_proxy_services() {
 		if [ -x "/etc/init.d/$service" ]; then
 			log "restoring proxy service after test: $service"
 			"/etc/init.d/$service" start >/dev/null 2>&1 || true
-			restored_count=$((restored_count + 1))
+			sleep 1
+			if ! proxy_service_is_active "$service"; then
+				log "proxy service still inactive after start, retrying restart: $service"
+				"/etc/init.d/$service" restart >/dev/null 2>&1 || true
+				sleep 1
+			fi
+			if proxy_service_is_active "$service"; then
+				restored_count=$((restored_count + 1))
+			else
+				log "proxy service restore failed: $service"
+			fi
 		fi
 	done < "$PROXY_STATE_FILE"
 	rm -f "$PROXY_STATE_FILE"
@@ -1166,12 +1176,14 @@ run_once() {
 		fi
 	done
 
+	restore_proxy_services
+
 	if [ "$success_any" -eq 1 ]; then
-		set_status "ok" "本轮优选完成：模式 ${ip_mode}，端口 ${test_ports}"
-		log "stage 3/3 complete: results saved, proxy restore will run during cleanup"
+		set_status "ok" "本轮优选完成，代理已恢复：模式 ${ip_mode}，端口 ${test_ports}"
+		log "stage 3/3 complete: results saved, proxies restored"
 		log "run complete"
 	else
-		set_status "error" "本轮优选未产出有效结果"
+		set_status "error" "本轮优选未产出有效结果，代理已恢复"
 		exit 1
 	fi
 }

@@ -151,7 +151,7 @@ apply_defaults() {
   uci -q get cf_ip_speed_client.main.ip_mode >/dev/null || uci set cf_ip_speed_client.main.ip_mode='dual'
   uci -q get cf_ip_speed_client.main.include_443 >/dev/null || uci set cf_ip_speed_client.main.include_443='1'
   uci -q get cf_ip_speed_client.main.custom_ports >/dev/null || uci set cf_ip_speed_client.main.custom_ports=''
-  uci -q get cf_ip_speed_client.main.test_url >/dev/null || uci set cf_ip_speed_client.main.test_url='https://speed.cloudflare.com/__down?bytes=10485760'
+  uci -q get cf_ip_speed_client.main.test_url >/dev/null || uci set cf_ip_speed_client.main.test_url=''
   uci -q get cf_ip_speed_client.main.schedule_mode >/dev/null || uci set cf_ip_speed_client.main.schedule_mode='daily'
   uci -q get cf_ip_speed_client.main.interval_hours >/dev/null || uci set cf_ip_speed_client.main.interval_hours='6'
   uci -q get cf_ip_speed_client.main.daily_hour >/dev/null || uci set cf_ip_speed_client.main.daily_hour='3'

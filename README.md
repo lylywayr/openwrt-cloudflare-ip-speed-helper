@@ -7,7 +7,7 @@
 包含两部分：
 
 - `cf-ip-speed-client`
-  用 `cfst` 做候选初筛与延迟排序，再用自定义逻辑做下载测速、缓存管理、失败淘汰、手动补种、代理停启控制。
+  使用 `cfst` 做候选初筛与延迟排序，再用自定义逻辑做下载测速、缓存管理、失败淘汰、手动补种、代理停启控制。
 - `luci-app-cf-ip-speed-client`
   LuCI 面板，入口 `服务 -> Cloudflare IP 优选助手`。
 
@@ -17,14 +17,14 @@
 
 - 支持 `IPv4`、`IPv6`、`IPv4 + IPv6`
 - 支持多端口优选，`443` 可强制包含
-- 自定义测速地址
+- 支持自定义测速地址
 - 候选 `50` 个、每个测速 `3` 次、线程数 `6`
-- 结果前 5 展示
+- 结果前 `5` 展示
 - 本地缓存池 `100` 条
 - 失败次数累计淘汰
 - 手动补种 IP
 - 实时日志
-- 优选前自动停止常见代理服务，结束后恢复
+- 优选前自动停止常见代理服务，结束后自动恢复
 - 适配中国大陆网络环境
 
 ## 目录
@@ -39,8 +39,13 @@ packaging/
 scripts/
   build-release.ps1
   build-release.sh
+docs/
 install.sh
 ```
+
+## 文档
+
+- [如何自建测速地址](docs/self-hosted-speed-url.md)
 
 ## 截图
 
@@ -92,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-spee
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.0 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.1 sh /tmp/cf-ip-speed-install.sh
 ```
 
 ### 方式 3：离线安装 `.ipk`
@@ -105,10 +110,10 @@ REF=v0.2.0 sh /tmp/cf-ip-speed-install.sh
 安装示例：
 
 ```sh
-opkg install ./cf-ip-speed-client_0.2.0_all.ipk ./luci-app-cf-ip-speed-client_0.2.0_all.ipk
+opkg install ./cf-ip-speed-client_0.2.1_all.ipk ./luci-app-cf-ip-speed-client_0.2.1_all.ipk
 ```
 
-然后单独安装 `cfst`，或直接再跑一遍仓库里的 `install.sh` 让脚本补全依赖与 `cfst`。
+然后单独安装 `cfst`，或直接再跑一遍仓库里的 `install.sh`，让脚本补全依赖与 `cfst`。
 
 ## 升级
 
@@ -162,16 +167,17 @@ dist/
 
 默认生成：
 
-- `cf-ip-speed-client_0.2.0_all.ipk`
-- `luci-app-cf-ip-speed-client_0.2.0_all.ipk`
+- `cf-ip-speed-client_0.2.1_all.ipk`
+- `luci-app-cf-ip-speed-client_0.2.1_all.ipk`
 - `install.sh`
 
 ## 注意
 
 - 当前安装脚本主测 `opkg` 环境
 - `cfst` 资源默认来自 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest)
+- 若 `测速地址` 留空，脚本会回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
 - 这套逻辑默认会在优选时停止常见代理服务；请不要在关键业务时间段直接启动优选
-- 首次安装后建议先检查 `测试地址`、`IP 模式`、`端口`、`执行计划`
+- 首次安装后建议先检查 `测速地址`、`IP 模式`、`端口`、`执行计划`
 
 ## 常见问题
 
@@ -214,7 +220,7 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 
 - `始终包含 443 端口` 是否开启
 - `自定义端口` 是否用英文逗号分隔
-- 当前 `测试地址` 是否允许这些端口
+- 当前 `测速地址` 是否允许这些端口
 
 ### 6. 如何只升级面板和脚本，不重装整机
 

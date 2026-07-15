@@ -17,12 +17,16 @@ Includes:
 - Multi-port testing, optional forced `443`
 - Custom download test URL
 - Top `50` candidates, `3` speed tests each, `6` threads
-- Top 5 result display
+- Top `5` result display
 - Local cache pool of `100`
 - Failure-count based eviction
 - Manual IP seed input
 - Live log panel
 - Stops common proxy services before testing, restores after finish
+
+## Docs
+
+- [How to self-host a speed test URL](docs/self-hosted-speed-url.md)
 
 ## Screenshots
 
@@ -58,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-spee
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.0 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.1 sh /tmp/cf-ip-speed-install.sh
 ```
 
 ### Method 3: offline `.ipk`
@@ -71,10 +75,15 @@ Release assets include universal `all` packages:
 Install:
 
 ```sh
-opkg install ./cf-ip-speed-client_0.2.0_all.ipk ./luci-app-cf-ip-speed-client_0.2.0_all.ipk
+opkg install ./cf-ip-speed-client_0.2.1_all.ipk ./luci-app-cf-ip-speed-client_0.2.1_all.ipk
 ```
 
 Then install `cfst`, or run `install.sh` once to finish dependencies and `cfst`.
+
+## Notes
+
+- If `test_url` is left blank, runtime falls back to `https://speed.cloudflare.com/__down?bytes=10485760`
+- Default config no longer ships any personal speed-test URL
 
 ## Build release locally
 
