@@ -1,0 +1,1367 @@
+#!/bin/sh
+
+set -eu
+
+CONFIG="cf_ip_speed_client"
+SECTION="main"
+WORKDIR="/tmp/cf-ip-speed-client"
+LOG_FILE="${WORKDIR}/run.log"
+CFST_LOG="${WORKDIR}/cfst.log"
+LOCK_DIR="${WORKDIR}/lock"
+BACKGROUND_LOG="${WORKDIR}/background.log"
+BACKGROUND_PID="${WORKDIR}/background.pid"
+IP_FILE="/etc/cf-ip-speed-client/ip.txt"
+IP_V6_FILE="/etc/cf-ip-speed-client/ip-v6.txt"
+CACHE_V4_FILE="/etc/cf-ip-speed-client/cache-v4.txt"
+CACHE_V6_FILE="/etc/cf-ip-speed-client/cache-v6.txt"
+MANUAL_V4_FILE="/etc/cf-ip-speed-client/manual-v4.txt"
+MANUAL_V6_FILE="/etc/cf-ip-speed-client/manual-v6.txt"
+DEFAULT_RESULT_FILE="${WORKDIR}/result.csv"
+DEFAULT_TEST_URL="https://speed.cloudflare.com/__down?bytes=10485760"
+
+CFST_ARGS="-n 60 -t 4 -tlr 0 -p 120 -dd"
+META_TEST_SIZE="10485760"
+MEASURE_TOP_N=50
+DISPLAY_TOP_N=5
+SPEED_TEST_REPEAT=3
+MEASURE_THREADS=6
+CACHE_FILL_TOP_N=100
+SPEED_CACHE_THRESHOLD_MB="12.50"
+CACHE_LIMIT=100
+FAIL_LIMIT=10
+
+PROXY_STATE_FILE="${WORKDIR}/proxy-services"
+PROXY_SERVICES="nikki openclash passwall passwall2 passwall_server passwall2_server homeproxy shadowsocksr shadowsocks-libev momo sing-box mihomo clash v2raya xray luci-xray nekobox fullcombo fullcombo-shark"
+
+cfg() {
+	uci -q get "${CONFIG}.${SECTION}.$1" 2>/dev/null || echo "${2:-}"
+}
+
+set_status() {
+	uci set "${CONFIG}.${SECTION}.last_status=$1"
+	uci set "${CONFIG}.${SECTION}.last_message=$2"
+	uci set "${CONFIG}.${SECTION}.last_run_at=$(TZ=CST-8 date '+%Y-%m-%d %H:%M:%S CST')"
+	uci commit "$CONFIG"
+}
+
+log() {
+	mkdir -p "$WORKDIR"
+	echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG_FILE"
+	logger -t cf-ip-speed-client "$*" || true
+}
+
+require_command() {
+	command -v "$1" >/dev/null 2>&1 || {
+		set_status "error" "missing command: $1"
+		exit 1
+	}
+}
+
+trim() {
+	printf '%s' "${1:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+parse_test_url() {
+	url="$1"
+	case "$url" in
+		http://*)
+			test_scheme="http"
+			rest="${url#http://}"
+			;;
+		https://*)
+			test_scheme="https"
+			rest="${url#https://}"
+			;;
+		*)
+			test_scheme="https"
+			rest="$url"
+			;;
+	esac
+
+	case "$rest" in
+		*/*)
+			test_host="${rest%%/*}"
+			test_path="/${rest#*/}"
+			;;
+		*)
+			test_host="$rest"
+			test_path="/"
+			;;
+	esac
+	[ -n "$test_path" ] || test_path="/"
+	case "$test_host" in
+		*:* )
+			test_port="$(printf '%s' "$test_host" | sed 's/^.*://')"
+			test_host="$(printf '%s' "$test_host" | sed 's/:.*$//')"
+			;;
+		* )
+			if [ "$test_scheme" = "http" ]; then
+				test_port="80"
+			else
+				test_port="443"
+			fi
+			;;
+	esac
+}
+
+is_ipv6() {
+	case "$1" in
+		*:* ) return 0 ;;
+		* ) return 1 ;;
+	esac
+}
+
+version_label() {
+	[ "$1" = "v6" ] && echo "IPv6" || echo "IPv4"
+}
+
+cache_file_for_version() {
+	[ "$1" = "v6" ] && echo "$CACHE_V6_FILE" || echo "$CACHE_V4_FILE"
+}
+
+manual_file_for_version() {
+	[ "$1" = "v6" ] && echo "$MANUAL_V6_FILE" || echo "$MANUAL_V4_FILE"
+}
+
+ip_file_for_version() {
+	[ "$1" = "v6" ] && echo "$IP_V6_FILE" || echo "$IP_FILE"
+}
+
+result_file_for_version() {
+	base="$1"
+	ip_version="$2"
+	if [ "$ip_version" = "v6" ]; then
+		case "$base" in
+			*.csv) echo "${base%.csv}-v6.csv" ;;
+			*) echo "${base}-v6.csv" ;;
+		esac
+	else
+		echo "$base"
+	fi
+}
+
+has_ipv6_route() {
+	ip -6 route show default 2>/dev/null | grep -q .
+}
+
+proxy_service_is_active() {
+	service="$1"
+	status_output="$("/etc/init.d/$service" status 2>&1 || true)"
+	case "$status_output" in
+		running|active) return 0 ;;
+	esac
+
+	case "$service" in
+		nikki) process_pattern="/etc/nikki/run" ;;
+		openclash) process_pattern="/etc/openclash" ;;
+		passwall) process_pattern="/tmp/etc/passwall/" ;;
+		passwall2) process_pattern="/tmp/etc/passwall2/" ;;
+		passwall_server) process_pattern="/tmp/etc/passwall_server/" ;;
+		passwall2_server) process_pattern="/tmp/etc/passwall2_server/" ;;
+		homeproxy) process_pattern="/var/run/homeproxy/" ;;
+		shadowsocksr) process_pattern="/var/etc/shadowsocksr/" ;;
+		shadowsocks-libev) process_pattern="ss-redir" ;;
+		momo) process_pattern="/etc/momo/" ;;
+		sing-box) process_pattern="sing-box run" ;;
+		mihomo) process_pattern="/usr/bin/mihomo" ;;
+		clash) process_pattern="/usr/bin/clash" ;;
+		v2raya) process_pattern="v2rayA" ;;
+		xray|luci-xray) process_pattern="/usr/bin/xray" ;;
+		nekobox) process_pattern="nekobox" ;;
+		fullcombo|fullcombo-shark) process_pattern="fullcombo" ;;
+		*) return 1 ;;
+	esac
+
+	ps ww 2>/dev/null | grep -F "$process_pattern" | grep -v grep >/dev/null 2>&1
+}
+
+stop_active_proxy_services() {
+	: > "$PROXY_STATE_FILE"
+	stopped_count=0
+	for service in $PROXY_SERVICES; do
+		if [ -x "/etc/init.d/$service" ] && proxy_service_is_active "$service"; then
+			echo "$service" >> "$PROXY_STATE_FILE"
+			log "stopping proxy service before test: $service"
+			"/etc/init.d/$service" stop >/dev/null 2>&1 || true
+			stopped_count=$((stopped_count + 1))
+		fi
+	done
+	if [ -s "$PROXY_STATE_FILE" ]; then
+		sleep 3
+	fi
+	log "proxy stop phase complete: ${stopped_count} service(s) stopped"
+}
+
+restore_proxy_services() {
+	if [ ! -f "$PROXY_STATE_FILE" ]; then
+		return 0
+	fi
+	restored_count=0
+	while IFS= read -r service; do
+		[ -n "$service" ] || continue
+		if [ -x "/etc/init.d/$service" ]; then
+			log "restoring proxy service after test: $service"
+			"/etc/init.d/$service" start >/dev/null 2>&1 || true
+			restored_count=$((restored_count + 1))
+		fi
+	done < "$PROXY_STATE_FILE"
+	rm -f "$PROXY_STATE_FILE"
+	log "proxy restore phase complete: ${restored_count} service(s) restored"
+}
+
+cleanup_run() {
+	restore_proxy_services
+	rm -f "$BACKGROUND_PID"
+	rm -f "$LOCK_DIR/pid"
+	rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+terminate_pid() {
+	target_pid="${1:-}"
+	[ -n "$target_pid" ] || return 0
+	if kill -0 "$target_pid" 2>/dev/null; then
+		kill "$target_pid" 2>/dev/null || true
+		sleep 1
+	fi
+	if command -v killall >/dev/null 2>&1; then
+		killall cfst 2>/dev/null || true
+	fi
+	if kill -0 "$target_pid" 2>/dev/null; then
+		kill -9 "$target_pid" 2>/dev/null || true
+		sleep 1
+	fi
+}
+
+add_port_unique() {
+	port="$1"
+	case " ${PORT_LIST:-} " in
+		*" $port "*) ;;
+		*) PORT_LIST="${PORT_LIST:+$PORT_LIST }$port" ;;
+	esac
+}
+
+resolve_test_ports() {
+	custom_ports="$1"
+	include_443="$2"
+	PORT_LIST=""
+
+	if [ "$include_443" = "1" ]; then
+		add_port_unique 443
+	fi
+
+	normalized="$(printf '%s' "$custom_ports" | tr ',;|/[:space:]' '       ')"
+	for raw_port in $normalized; do
+		port="$(printf '%s' "$raw_port" | sed 's/[^0-9]//g')"
+		[ -n "$port" ] || continue
+		if [ "$port" -lt 1 ] 2>/dev/null || [ "$port" -gt 65535 ] 2>/dev/null; then
+			continue
+		fi
+		add_port_unique "$port"
+	done
+
+	[ -n "$PORT_LIST" ] || PORT_LIST="443"
+	echo "$PORT_LIST"
+}
+
+ensure_cache_dirs() {
+	mkdir -p /etc/cf-ip-speed-client
+	touch "$CACHE_V4_FILE" "$CACHE_V6_FILE" "$MANUAL_V4_FILE" "$MANUAL_V6_FILE"
+}
+
+cache_count() {
+	awk 'NF{c++} END{print c+0}' "$1" 2>/dev/null
+}
+
+cache_record_for_ip() {
+	awk -F',' -v target="$2" '$1==target{print; exit}' "$1" 2>/dev/null || true
+}
+
+remove_cache_ip() {
+	cache_file="$1"
+	ip="$2"
+	tmp_file="${WORKDIR}/cache-remove.tmp"
+	awk -F',' -v target="$ip" '$1!=target' "$cache_file" > "$tmp_file" 2>/dev/null || : > "$tmp_file"
+	mv "$tmp_file" "$cache_file"
+}
+
+make_cache_record() {
+	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
+		"$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}"
+}
+
+sort_cache_file() {
+	cache_file="$1"
+	tmp_file="${WORKDIR}/cache-sort.tmp"
+	mkdir -p "$WORKDIR"
+	[ -f "$cache_file" ] || {
+		: > "$cache_file"
+		return 0
+	}
+
+	awk -F',' '
+	NF {
+		fail = ($7 == "" ? 0 : $7) + 0
+		group = (fail > 0 ? 1 : 0)
+		loss = ($8 == "" ? 1.0000 : $8) + 0
+		speed = ($9 == "" ? 0.00 : $9) + 0
+		latency = ($10 == "" ? 999999 : $10) + 0
+		loss_rank = int((loss * 10000) + 0.5)
+		speed_rank = 999999999 - int((speed * 100) + 0.5)
+		latency_rank = int((latency * 100) + 0.5)
+		printf "%d|%010d|%010d|%010d|%08d|%s\n", group, loss_rank, speed_rank, latency_rank, NR, $0
+	}' "$cache_file" \
+	| sort -t '|' -k1,1 -k2,2n -k3,3n -k4,4n -k5,5n \
+	| awk -F'|' '{ print $6 }' > "$tmp_file"
+
+	mv "$tmp_file" "$cache_file"
+}
+
+normalize_cache_file() {
+	ip_version="$1"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	tmp_file="${WORKDIR}/cache-normalize-${ip_version}.tmp"
+	: > "$tmp_file"
+
+	while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+		line="$(trim "$raw_line")"
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue ;; esac
+		IFS=',' read -r c_ip c_port c_colo c_country c_city c_source c_fail c_loss c_speed c_latency c_updated <<EOF
+$line
+EOF
+		c_ip="$(trim "$c_ip")"
+		[ -n "$c_ip" ] || continue
+		if [ "$ip_version" = "v6" ]; then
+			is_ipv6 "$c_ip" || continue
+		else
+			is_ipv6 "$c_ip" && continue
+		fi
+		c_port="$(printf '%s' "$(trim "${c_port:-443}")" | sed 's/[^0-9]//g')"
+		[ -n "$c_port" ] || c_port="443"
+		c_colo="$(trim "${c_colo:-N/A}")"
+		c_country=""
+		c_city=""
+		c_source="$(trim "${c_source:-manual}")"
+		c_fail="$(printf '%s' "$(trim "${c_fail:-0}")" | sed 's/[^0-9]//g')"
+		[ -n "$c_fail" ] || c_fail="0"
+		if [ -z "${c_updated:-}" ] && printf '%s' "${c_latency:-}" | grep -Eq '[A-Za-z]'; then
+			c_updated="$c_latency"
+			c_latency="$c_speed"
+			c_speed="$c_loss"
+			c_loss="1.0000"
+		fi
+		c_loss="$(trim "${c_loss:-1.0000}")"
+		[ -n "$c_loss" ] || c_loss="1.0000"
+		c_speed="$(trim "${c_speed:-0.00}")"
+		[ -n "$c_speed" ] || c_speed="0.00"
+		c_latency="$(trim "${c_latency:-999999}")"
+		[ -n "$c_latency" ] || c_latency="999999"
+		c_updated="$(trim "${c_updated:-}")"
+		printf '%s\n' "$(make_cache_record "$c_ip" "$c_port" "$c_colo" "$c_country" "$c_city" "$c_source" "$c_fail" "$c_loss" "$c_speed" "$c_latency" "$c_updated")" >> "$tmp_file"
+	done < "$cache_file"
+
+	awk -F',' '!seen[$1]++' "$tmp_file" > "${tmp_file}.dedup"
+	mv "${tmp_file}.dedup" "$cache_file"
+	sort_cache_file "$cache_file"
+}
+
+normalize_manual_file() {
+	ip_version="$1"
+	manual_file="$(manual_file_for_version "$ip_version")"
+	tmp_file="${WORKDIR}/manual-normalize-${ip_version}.tmp"
+	: > "$tmp_file"
+
+	while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+		line="$(trim "$raw_line")"
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue ;; esac
+		IFS=',' read -r m_ip m_port <<EOF
+$line
+EOF
+		m_ip="$(trim "$m_ip")"
+		[ -n "$m_ip" ] || continue
+		if [ "$ip_version" = "v6" ]; then
+			is_ipv6 "$m_ip" || continue
+		else
+			is_ipv6 "$m_ip" && continue
+		fi
+		m_port="$(printf '%s' "$(trim "${m_port:-443}")" | sed 's/[^0-9]//g')"
+		[ -n "$m_port" ] || m_port="443"
+		if [ "$m_port" -lt 1 ] 2>/dev/null || [ "$m_port" -gt 65535 ] 2>/dev/null; then
+			continue
+		fi
+		printf '%s,%s\n' "$m_ip" "$m_port" >> "$tmp_file"
+	done < "$manual_file"
+
+	awk -F',' '!seen[$1 FS $2]++' "$tmp_file" > "${tmp_file}.dedup"
+	mv "${tmp_file}.dedup" "$manual_file"
+}
+
+parse_manual_token() {
+	token="$(trim "${1:-}")"
+	[ -n "$token" ] || return 1
+
+	parsed_ip=""
+	parsed_port="443"
+	case "$token" in
+		\[*\]:*)
+			parsed_ip="${token#\[}"
+			parsed_ip="${parsed_ip%%]*}"
+			parsed_port="${token##*\]:}"
+			;;
+		*:* )
+			colon_count="$(printf '%s' "$token" | awk -F':' '{print NF-1}')"
+			if [ "$colon_count" -eq 1 ]; then
+				parsed_ip="${token%%:*}"
+				parsed_port="${token##*:}"
+			else
+				parsed_ip="$token"
+			fi
+			;;
+		*)
+			parsed_ip="$token"
+			;;
+	esac
+
+	parsed_ip="$(trim "$parsed_ip")"
+	[ -n "$parsed_ip" ] || return 1
+	parsed_port="$(printf '%s' "$(trim "${parsed_port:-443}")" | sed 's/[^0-9]//g')"
+	[ -n "$parsed_port" ] || parsed_port="443"
+	if [ "$parsed_port" -lt 1 ] 2>/dev/null || [ "$parsed_port" -gt 65535 ] 2>/dev/null; then
+		return 1
+	fi
+
+	if is_ipv6 "$parsed_ip"; then
+		printf 'v6\t%s\t%s\n' "$parsed_ip" "$parsed_port"
+	else
+		printf 'v4\t%s\t%s\n' "$parsed_ip" "$parsed_port"
+	fi
+}
+
+format_manual_token() {
+	ip="$1"
+	port="${2:-443}"
+	if is_ipv6 "$ip"; then
+		if [ "$port" = "443" ]; then
+			printf '%s' "$ip"
+		else
+			printf '[%s]:%s' "$ip" "$port"
+		fi
+	else
+		if [ "$port" = "443" ]; then
+			printf '%s' "$ip"
+		else
+			printf '%s:%s' "$ip" "$port"
+		fi
+	fi
+}
+
+show_manual() {
+	first=1
+	for ip_version in v4 v6; do
+		manual_file="$(manual_file_for_version "$ip_version")"
+		[ -f "$manual_file" ] || continue
+		while IFS=',' read -r m_ip m_port || [ -n "$m_ip$m_port" ]; do
+			m_ip="$(trim "$m_ip")"
+			[ -n "$m_ip" ] || continue
+			m_port="$(printf '%s' "$(trim "${m_port:-443}")" | sed 's/[^0-9]//g')"
+			[ -n "$m_port" ] || m_port="443"
+			token="$(format_manual_token "$m_ip" "$m_port")"
+			if [ "$first" -eq 1 ]; then
+				printf '%s' "$token"
+				first=0
+			else
+				printf ', %s' "$token"
+			fi
+		done < "$manual_file"
+	done
+	echo
+}
+
+import_manual_base64() {
+	base64_data="${1:-}"
+	tmp_raw="${WORKDIR}/manual-import.txt"
+	tmp_v4="${WORKDIR}/manual-import-v4.txt"
+	tmp_v6="${WORKDIR}/manual-import-v6.txt"
+	: > "$tmp_raw"
+	: > "$tmp_v4"
+	: > "$tmp_v6"
+
+	if [ -n "$base64_data" ]; then
+		printf '%s' "$base64_data" | openssl enc -base64 -d -A > "$tmp_raw"
+	fi
+
+	tr ',\r\n\t' '\n\n\n\n' < "$tmp_raw" | while IFS= read -r raw_token || [ -n "$raw_token" ]; do
+		token="$(trim "$raw_token")"
+		[ -n "$token" ] || continue
+		parsed="$(parse_manual_token "$token" || true)"
+		[ -n "$parsed" ] || continue
+		old_ifs="$IFS"
+		IFS="$(printf '\t')"
+		read -r parsed_version parsed_ip parsed_port <<EOF
+$parsed
+EOF
+		IFS="$old_ifs"
+		case "$parsed_version" in
+			v6) printf '%s,%s\n' "$parsed_ip" "$parsed_port" >> "$tmp_v6" ;;
+			*) printf '%s,%s\n' "$parsed_ip" "$parsed_port" >> "$tmp_v4" ;;
+		esac
+	done
+
+	awk -F',' '!seen[$1 FS $2]++' "$tmp_v4" > "$MANUAL_V4_FILE"
+	awk -F',' '!seen[$1 FS $2]++' "$tmp_v6" > "$MANUAL_V6_FILE"
+	normalize_manual_file v4
+	normalize_manual_file v6
+	echo "manual seeds imported"
+}
+
+resolve_manual_ports() {
+	manual_file="$1"
+	PORT_LIST=""
+	[ -f "$manual_file" ] || {
+		echo ""
+		return 0
+	}
+	while IFS=',' read -r m_ip m_port || [ -n "$m_ip$m_port" ]; do
+		m_port="$(printf '%s' "$(trim "${m_port:-443}")" | sed 's/[^0-9]//g')"
+		[ -n "$m_port" ] || m_port="443"
+		if [ "$m_port" -lt 1 ] 2>/dev/null || [ "$m_port" -gt 65535 ] 2>/dev/null; then
+			continue
+		fi
+		add_port_unique "$m_port"
+	done < "$manual_file"
+	echo "$PORT_LIST"
+}
+
+merge_port_lists() {
+	PORT_LIST=""
+	for raw_port in $1 $2; do
+		port="$(printf '%s' "$raw_port" | sed 's/[^0-9]//g')"
+		[ -n "$port" ] || continue
+		add_port_unique "$port"
+	done
+	[ -n "$PORT_LIST" ] || PORT_LIST="443"
+	echo "$PORT_LIST"
+}
+
+build_run_source_file() {
+	ip_version="$1"
+	source_ip_file="$2"
+	manual_file="$3"
+	tmp_file="${WORKDIR}/run-source-${ip_version}.txt"
+	: > "$tmp_file"
+
+	if [ -f "$manual_file" ]; then
+		while IFS=',' read -r m_ip m_port || [ -n "$m_ip$m_port" ]; do
+			m_ip="$(trim "$m_ip")"
+			[ -n "$m_ip" ] || continue
+			printf '%s\n' "$m_ip" >> "$tmp_file"
+		done < "$manual_file"
+	fi
+	[ -f "$source_ip_file" ] && cat "$source_ip_file" >> "$tmp_file"
+	awk '!seen[$0]++' "$tmp_file" > "${tmp_file}.dedup"
+	mv "${tmp_file}.dedup" "$tmp_file"
+	echo "$tmp_file"
+}
+
+sync_manual_file_with_cache() {
+	ip_version="$1"
+	manual_file="$(manual_file_for_version "$ip_version")"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	tmp_file="${WORKDIR}/manual-sync-${ip_version}.txt"
+	: > "$tmp_file"
+
+	[ -f "$manual_file" ] || return 0
+	while IFS=',' read -r m_ip m_port || [ -n "$m_ip$m_port" ]; do
+		m_ip="$(trim "$m_ip")"
+		[ -n "$m_ip" ] || continue
+		m_port="$(printf '%s' "$(trim "${m_port:-443}")" | sed 's/[^0-9]//g')"
+		[ -n "$m_port" ] || m_port="443"
+		cache_match="$(awk -F',' -v target_ip="$m_ip" '
+			$1 == target_ip && $6 != "seed" { print $1 "," $2; exit }
+		' "$cache_file" 2>/dev/null || true)"
+		[ -n "$cache_match" ] || continue
+		printf '%s\n' "$cache_match" >> "$tmp_file"
+	done < "$manual_file"
+
+	awk -F',' '!seen[$1]++' "$tmp_file" > "$manual_file"
+}
+
+measure_target_meta() {
+	ip_version="$1"
+	target_ip="$2"
+	target_port="${3:-443}"
+	base_test_url="$(cfg test_url "$DEFAULT_TEST_URL")"
+	[ -n "$target_ip" ] || return 1
+	parse_test_url "$base_test_url"
+
+	case "$ip_version" in
+		v6) resolve_ip="[$target_ip]"; family_flag="-6" ;;
+		*) resolve_ip="$target_ip"; family_flag="-4" ;;
+	esac
+
+	request_host="$test_host"
+	request_scheme="$test_scheme"
+	request_port="$target_port"
+	if [ -z "$request_port" ]; then
+		request_port="$test_port"
+	fi
+	test_url="${request_scheme}://${request_host}:${request_port}${test_path}"
+	if { [ "$request_scheme" = "https" ] && [ "$request_port" = "443" ]; } || { [ "$request_scheme" = "http" ] && [ "$request_port" = "80" ]; }; then
+		test_url="${request_scheme}://${request_host}${test_path}"
+	fi
+
+	speed_output="$(curl $family_flag -kL --connect-timeout 10 --max-time 20 \
+		--resolve "${request_host}:${request_port}:${resolve_ip}" \
+		"$test_url" -o /dev/null -s -w '%{http_code}\t%{speed_download}' 2>/dev/null || true)"
+	http_code="$(printf '%s' "$speed_output" | awk -F'\t' '{print $1}')"
+	speed_bytes="$(printf '%s' "$speed_output" | awk -F'\t' '{print $2}')"
+	case "$http_code" in
+		200) ;;
+		*) speed_bytes="" ;;
+	esac
+
+	header_output="$(curl $family_flag -kIs --connect-timeout 10 --max-time 20 \
+		--resolve "${request_host}:${request_port}:${resolve_ip}" \
+		"$test_url" 2>/dev/null || true)"
+	header_output="$(printf '%s' "$header_output" | tr -d '\r')"
+	colo="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="colo"{print $2; exit}')"
+	[ -n "$colo" ] || colo="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="x-cf-colo"{print $2; exit}')"
+	country=""
+	city=""
+
+	speed_mb="0.00"
+	if [ -n "$speed_bytes" ] && [ "$speed_bytes" != "0" ]; then
+		speed_mb="$(awk -v b="$speed_bytes" 'BEGIN { printf "%.2f", b / 1048576 }')"
+	fi
+
+	printf '%s\t%s\t%s\t%s\n' "$speed_mb" "${colo:-N/A}" "$country" "$city"
+}
+
+sync_cache_record() {
+	ip_version="$1"
+	ip="$2"
+	port="$(printf '%s' "${3:-443}" | sed 's/[^0-9]//g')"
+	[ -n "$port" ] || port="443"
+	colo="$(trim "${4:-}")"
+	country="$(trim "${5:-}")"
+	city="$(trim "${6:-}")"
+	source="$(trim "${7:-manual}")"
+	fail_count="$(printf '%s' "$(trim "${8:-0}")" | sed 's/[^0-9]//g')"
+	[ -n "$fail_count" ] || fail_count="0"
+	loss="$(trim "${9:-1.0000}")"
+	[ -n "$loss" ] || loss="1.0000"
+	speed="$(trim "${10:-0.00}")"
+	latency="$(trim "${11:-999999}")"
+	updated="$(trim "${12:-}")"
+
+	if [ -z "$colo" ] || [ "$speed" = "0.00" ]; then
+		meta_fields="$(measure_target_meta "$ip_version" "$ip" "$port" || true)"
+		if [ -n "$meta_fields" ]; then
+			old_ifs="$IFS"
+			IFS="$(printf '\t')"
+			read -r meta_speed meta_colo meta_country meta_city <<EOF
+$meta_fields
+EOF
+			IFS="$old_ifs"
+			[ -n "$colo" ] || colo="${meta_colo:-N/A}"
+			if [ "$speed" = "0.00" ] && [ -n "${meta_speed:-}" ]; then
+				speed="$meta_speed"
+			fi
+		fi
+	fi
+
+	[ -n "$colo" ] || colo="N/A"
+	[ -n "$country" ] || country=""
+	[ -n "$city" ] || city=""
+	printf '%s\n' "$(make_cache_record "$ip" "$port" "$colo" "$country" "$city" "$source" "$fail_count" "$loss" "$speed" "$latency" "$updated")"
+}
+
+import_cache_base64() {
+	ip_version="$1"
+	base64_data="$2"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	tmp_raw="${WORKDIR}/cache-import-${ip_version}.txt"
+	tmp_out="${WORKDIR}/cache-import-out-${ip_version}.txt"
+
+	printf '%s' "$base64_data" | openssl enc -base64 -d -A > "$tmp_raw"
+	: > "$tmp_out"
+	while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+		line="$(trim "$raw_line")"
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue ;; esac
+		IFS=',' read -r c_ip c_port c_colo c_country c_city c_source c_fail c_loss c_speed c_latency c_updated <<EOF
+$line
+EOF
+		c_ip="$(trim "$c_ip")"
+		[ -n "$c_ip" ] || continue
+		if [ "$ip_version" = "v6" ]; then
+			is_ipv6 "$c_ip" || continue
+		else
+			is_ipv6 "$c_ip" && continue
+		fi
+		if [ -z "${c_updated:-}" ] && printf '%s' "${c_latency:-}" | grep -Eq '[A-Za-z]'; then
+			c_updated="$c_latency"
+			c_latency="$c_speed"
+			c_speed="$c_loss"
+			c_loss="1.0000"
+		fi
+		sync_cache_record "$ip_version" "$c_ip" "${c_port:-443}" "${c_colo:-}" "${c_country:-}" "${c_city:-}" "${c_source:-manual}" "${c_fail:-0}" "${c_loss:-1.0000}" "${c_speed:-0.00}" "${c_latency:-999999}" "${c_updated:-}" >> "$tmp_out"
+	done < "$tmp_raw"
+
+	awk -F',' '!seen[$1]++' "$tmp_out" > "$cache_file"
+	normalize_cache_file "$ip_version"
+	echo "cache imported: $ip_version"
+}
+
+show_cache() {
+	case "${1:-all}" in
+		v4|v6)
+			cache_file="$(cache_file_for_version "$1")"
+			[ -f "$cache_file" ] && cat "$cache_file"
+			;;
+		*)
+			echo "=== v4 ==="
+			[ -f "$CACHE_V4_FILE" ] && cat "$CACHE_V4_FILE"
+			echo
+			echo "=== v6 ==="
+			[ -f "$CACHE_V6_FILE" ] && cat "$CACHE_V6_FILE"
+			;;
+	esac
+}
+
+clear_cache() {
+	: > "$CACHE_V4_FILE"
+	: > "$CACHE_V6_FILE"
+	echo "cache cleared"
+}
+
+normalize_cache_all() {
+	normalize_cache_file v4
+	normalize_cache_file v6
+	echo "cache normalized"
+}
+
+clear_result_state() {
+	for ip_version in v4 v6; do
+		for field in ip port speed latency loss colo country city result_file updated_at topn; do
+			uci -q delete "${CONFIG}.${SECTION}.last_result_${ip_version}_${field}" 2>/dev/null || true
+		done
+	done
+	uci commit "$CONFIG"
+}
+
+cfst_candidate_lines() {
+	result_file="$1"
+	limit="$2"
+	awk -F',' -v top_n="$limit" '
+	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
+	NR == 1 { next }
+	NF >= 5 && count < top_n {
+		ip = trim($1)
+		port = "443"
+		lat = trim($5)
+		loss = trim($4)
+		gsub(/[^0-9.]/, "", port)
+		gsub(/[^0-9.]/, "", lat)
+		gsub(/[^0-9.]/, "", loss)
+		print ip "\t" (port ? port : "443") "\t" (lat ? lat : "0") "\t" (loss ? loss : "0")
+		count++
+	}' "$result_file"
+}
+
+measure_candidate_worker() {
+	ip_version="$1"
+	cache_file="$2"
+	item_ip="$3"
+	item_port="$4"
+	item_latency="$5"
+	item_loss="$6"
+	updated_at="$7"
+	out_file="$8"
+
+	record="$(cache_record_for_ip "$cache_file" "$item_ip")"
+	if [ -n "$record" ]; then
+		IFS=',' read -r _ip _port _colo _country _city _source _fail _speed _lat _updated <<EOF
+$record
+EOF
+		printf '%s~%s~%s~%s~%s~%s~%s~%s~%s\n' \
+			"$item_ip" "$item_port" "${_speed:-0.00}" "$item_latency" "$item_loss" \
+			"${_colo:-N/A}" "${_country:-N/A}" "${_city:-N/A}" "$updated_at" > "$out_file"
+		exit 0
+	fi
+
+	total_speed="0"
+	item_colo="N/A"
+	item_country="N/A"
+	item_city="N/A"
+	success_count=0
+	test_round=1
+	while [ "$test_round" -le "$SPEED_TEST_REPEAT" ]; do
+		meta_fields="$(measure_target_meta "$ip_version" "$item_ip" "$item_port" || true)"
+		if [ -n "$meta_fields" ]; then
+			old_ifs="$IFS"
+			IFS="$(printf '\t')"
+			read -r round_speed round_colo round_country round_city <<EOF
+$meta_fields
+EOF
+			IFS="$old_ifs"
+			round_speed="${round_speed:-0.00}"
+			total_speed="$(awk -v a="$total_speed" -v b="$round_speed" 'BEGIN { printf "%.6f", (a + 0) + (b + 0) }')"
+			success_count=$((success_count + 1))
+			[ "$item_colo" = "N/A" ] && item_colo="${round_colo:-N/A}"
+			[ "$item_country" = "N/A" ] && item_country="${round_country:-N/A}"
+			[ "$item_city" = "N/A" ] && item_city="${round_city:-N/A}"
+		fi
+		test_round=$((test_round + 1))
+	done
+
+	if [ "$success_count" -gt 0 ]; then
+		item_speed="$(awk -v t="$total_speed" -v c="$success_count" 'BEGIN { printf "%.2f", (t + 0) / c }')"
+	else
+		item_speed="0.00"
+	fi
+
+	printf '%s~%s~%s~%s~%s~%s~%s~%s~%s\n' \
+		"$item_ip" "$item_port" "$item_speed" "$item_latency" "$item_loss" \
+		"$item_colo" "$item_country" "$item_city" "$updated_at" > "$out_file"
+}
+
+build_measured_summary_file() {
+	ip_version="$1"
+	result_file="$2"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	candidate_file="${WORKDIR}/candidates-${ip_version}.txt"
+	measured_file="${WORKDIR}/measured-${ip_version}.txt"
+	updated_at="$(TZ=CST-8 date '+%Y-%m-%d %H:%M:%S CST')"
+	label="$(version_label "$ip_version")"
+
+	rm -f "${WORKDIR}/measure-${ip_version}-"*.out 2>/dev/null || true
+	cfst_candidate_lines "$result_file" "$MEASURE_TOP_N" > "$candidate_file"
+	: > "$measured_file"
+	candidate_count="$(awk 'NF{c++} END{print c+0}' "$candidate_file" 2>/dev/null)"
+	set_status "running" "${label} 自定义测速中：${candidate_count} 个候选，${SPEED_TEST_REPEAT} 次测速，${MEASURE_THREADS} 线程"
+	log "${label} custom speed test start: ${candidate_count} candidates, repeat ${SPEED_TEST_REPEAT}, threads ${MEASURE_THREADS}"
+
+	pids=""
+	slot=0
+	index=0
+	completed=0
+	while IFS="$(printf '\t')" read -r item_ip item_port item_latency item_loss; do
+		[ -n "$item_ip" ] || continue
+		out_file="${WORKDIR}/measure-${ip_version}-${index}.out"
+		(
+			measure_candidate_worker "$ip_version" "$cache_file" "$item_ip" "$item_port" "$item_latency" "$item_loss" "$updated_at" "$out_file"
+		) &
+		pids="$pids $!"
+		slot=$((slot + 1))
+		index=$((index + 1))
+		if [ "$slot" -ge "$MEASURE_THREADS" ]; then
+			for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+			completed=$((completed + slot))
+			set_status "running" "${label} 自定义测速中：已完成 ${completed}/${candidate_count}"
+			pids=""
+			slot=0
+		fi
+	done < "$candidate_file"
+	if [ -n "$pids" ]; then
+		for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+		completed=$((completed + slot))
+		set_status "running" "${label} 自定义测速中：已完成 ${completed}/${candidate_count}"
+	fi
+
+	cat "${WORKDIR}/measure-${ip_version}-"*.out 2>/dev/null > "$measured_file" || : > "$measured_file"
+	rm -f "${WORKDIR}/measure-${ip_version}-"*.out 2>/dev/null || true
+	sort -t'~' -k3,3nr -k4,4n "$measured_file" > "${measured_file}.sorted"
+	mv "${measured_file}.sorted" "$measured_file"
+	log "${label} custom speed test finished"
+	echo "$measured_file"
+}
+
+build_display_summary() {
+	summary_file="$1"
+	awk -F'~' -v top_n="$DISPLAY_TOP_N" '
+	BEGIN { first = 1; count = 0 }
+	NF && count < top_n {
+		if (!first) printf "|"
+		printf "%s", $0
+		first = 0
+		count++
+	}
+	END { printf "\n" }' "$summary_file"
+}
+
+summary_record_for_ip() {
+	printf '%s' "$1" | tr '|' '\n' | awk -F'~' -v target="$2" '$1==target{print; exit}'
+}
+
+worst_cache_ip() {
+	awk -F',' '
+	BEGIN { have=0 }
+	NF {
+		speed = ($8 == "" ? 0 : $8) + 0
+		lat = ($9 == "" ? 999999 : $9) + 0
+		fail = ($7 == "" ? 0 : $7) + 0
+		if (!have || speed < best_speed || (speed == best_speed && lat > best_lat) || (speed == best_speed && lat == best_lat && fail > best_fail)) {
+			best_ip = $1; best_speed = speed; best_lat = lat; best_fail = fail; have = 1
+		}
+	}
+	END { if (have) print best_ip "," best_speed "," best_lat "," best_fail }' "$1"
+}
+
+compare_better() {
+	awk -v sa="$1" -v la="$2" -v sb="$3" -v lb="$4" '
+	BEGIN {
+		if ((sa + 0) > (sb + 0)) exit 0
+		if ((sa + 0) < (sb + 0)) exit 1
+		if ((la + 0) < (lb + 0)) exit 0
+		exit 1
+	}'
+}
+
+refresh_cache_from_measured() {
+	ip_version="$1"
+	summary_file="$2"
+	result_file="$3"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	tmp_file="${WORKDIR}/cache-refresh-${ip_version}.tmp"
+	was_empty=0
+	[ "$(cache_count "$cache_file")" -eq 0 ] && was_empty=1
+	: > "$tmp_file"
+
+	while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+		line="$(trim "$raw_line")"
+		[ -n "$line" ] || continue
+		IFS=',' read -r c_ip c_port c_colo c_country c_city c_source c_fail c_speed c_latency c_updated <<EOF
+$line
+EOF
+		match="$(awk -F'~' -v target="$c_ip" '$1==target{print; exit}' "$summary_file")"
+		if [ -n "$match" ]; then
+			IFS='~' read -r s_ip s_port s_speed s_latency s_loss s_colo s_country s_city s_updated <<EOF
+$match
+EOF
+			printf '%s\n' "$(make_cache_record "$s_ip" "$s_port" "$s_colo" "$s_country" "$s_city" "${c_source:-auto}" "0" "$s_speed" "$s_latency" "$s_updated")" >> "$tmp_file"
+		else
+			fail_count="$(printf '%s' "${c_fail:-0}" | sed 's/[^0-9]//g')"
+			[ -n "$fail_count" ] || fail_count="0"
+			fail_count=$((fail_count + 1))
+			if [ "$fail_count" -lt "$FAIL_LIMIT" ]; then
+				printf '%s\n' "$(make_cache_record "$c_ip" "${c_port:-443}" "${c_colo:-N/A}" "${c_country:-N/A}" "${c_city:-N/A}" "${c_source:-manual}" "$fail_count" "${c_speed:-0.00}" "${c_latency:-999999}" "${c_updated:-}")" >> "$tmp_file"
+			else
+				log "dropping cache record after ${FAIL_LIMIT} misses: $c_ip"
+			fi
+		fi
+	done < "$cache_file"
+
+	awk -F'~' -v threshold="$SPEED_CACHE_THRESHOLD_MB" '
+	NF && ($3 + 0) > (threshold + 0) { print }' "$summary_file" | while IFS='~' read -r s_ip s_port s_speed s_latency s_loss s_colo s_country s_city s_updated; do
+		existing="$(cache_record_for_ip "$tmp_file" "$s_ip")"
+		[ -z "$existing" ] || continue
+		new_record="$(make_cache_record "$s_ip" "$s_port" "$s_colo" "$s_country" "$s_city" "auto" "0" "$s_speed" "$s_latency" "$s_updated")"
+		count="$(cache_count "$tmp_file")"
+		if [ "$count" -lt "$CACHE_LIMIT" ]; then
+			printf '%s\n' "$new_record" >> "$tmp_file"
+		else
+			worst="$(worst_cache_ip "$tmp_file" || true)"
+			[ -n "$worst" ] || continue
+			worst_ip="$(printf '%s' "$worst" | cut -d',' -f1)"
+			worst_speed="$(printf '%s' "$worst" | cut -d',' -f2)"
+			worst_latency="$(printf '%s' "$worst" | cut -d',' -f3)"
+			if compare_better "$s_speed" "$s_latency" "$worst_speed" "$worst_latency"; then
+				remove_cache_ip "$tmp_file" "$worst_ip"
+				printf '%s\n' "$new_record" >> "$tmp_file"
+			fi
+		fi
+	done
+
+	if [ "$was_empty" -eq 1 ] && [ "$(cache_count "$tmp_file")" -lt "$CACHE_LIMIT" ]; then
+		seed_file="${WORKDIR}/seed-${ip_version}.txt"
+		cfst_candidate_lines "$result_file" "$CACHE_FILL_TOP_N" > "$seed_file"
+		while IFS="$(printf '\t')" read -r seed_ip seed_port seed_latency seed_loss; do
+			[ "$(cache_count "$tmp_file")" -lt "$CACHE_LIMIT" ] || break
+			existing="$(cache_record_for_ip "$tmp_file" "$seed_ip")"
+			[ -z "$existing" ] || continue
+			sync_cache_record "$ip_version" "$seed_ip" "$seed_port" "" "" "" "seed" "0" "0.00" "$seed_latency" "" >> "$tmp_file"
+		done < "$seed_file"
+	fi
+
+	awk -F',' '!seen[$1]++' "$tmp_file" > "$cache_file"
+}
+
+best_fields_from_display() {
+	display_summary="$1"
+	printf '%s' "$display_summary" | tr '|' '\n' | awk -F'~' 'NF{ print $1 "\t" $2 "\t" $4 "\t" $3 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9; exit }'
+}
+
+save_result_state() {
+	ip_version="$1"
+	result_file="$2"
+	display_summary="$(awk -F',' -v top_n="$DISPLAY_TOP_N" '
+	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
+	NR == 1 { next }
+	NF >= 11 && count < top_n {
+		if (!first) printf "|"
+		printf "%s~%s~%s~%s~%s~%s~%s~%s~%s",
+			trim($1), trim($8), trim($6), trim($5), trim($4),
+			trim($7), trim($9), trim($10), trim($11)
+		first = 0
+		count++
+	}
+	END { printf "\n" }' "$result_file" 2>/dev/null || true)"
+	[ -n "$display_summary" ] || return 0
+
+	best_fields="$(awk -F',' '
+	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
+	NR == 2 {
+		print trim($1) "\t" trim($8) "\t" trim($5) "\t" trim($6) "\t" trim($4) "\t" trim($7) "\t" trim($9) "\t" trim($10) "\t" trim($11)
+		exit
+	}' "$result_file" 2>/dev/null || true)"
+	old_ifs="$IFS"
+	IFS="$(printf '\t')"
+	read -r best_ip best_port best_latency best_speed best_loss best_colo best_country best_city best_updated <<EOF
+$best_fields
+EOF
+	IFS="$old_ifs"
+
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_ip=$best_ip"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_port=$best_port"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_speed=$best_speed"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_latency=$best_latency"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_loss=$best_loss"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_colo=$best_colo"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_country=$best_country"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_city=$best_city"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_result_file=$result_file"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_updated_at=$best_updated"
+	uci set "${CONFIG}.${SECTION}.last_result_${ip_version}_topn=$display_summary"
+	uci commit "$CONFIG"
+}
+
+build_priority_ip_file() {
+	ip_version="$1"
+	source_ip_file="$2"
+	target_ip_file="$3"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	: > "$target_ip_file"
+	if [ -f "$cache_file" ]; then
+		cut -d',' -f1 "$cache_file" | awk 'NF' >> "$target_ip_file"
+	fi
+	cat "$source_ip_file" >> "$target_ip_file"
+	awk '!seen[$0]++' "$target_ip_file" > "${target_ip_file}.dedup"
+	mv "${target_ip_file}.dedup" "$target_ip_file"
+}
+
+run_cfst_for_version() {
+	ip_version="$1"
+	result_file="$2"
+	test_ports="$3"
+	label="$(version_label "$ip_version")"
+	source_ip_file="$(ip_file_for_version "$ip_version")"
+	cache_file="$(cache_file_for_version "$ip_version")"
+	manual_file="$(manual_file_for_version "$ip_version")"
+	test_url="$(cfg test_url "$DEFAULT_TEST_URL")"
+	manual_ports="$(resolve_manual_ports "$manual_file")"
+	effective_test_ports="$(merge_port_lists "$test_ports" "$manual_ports")"
+	custom_ports_csv="$(printf '%s\n' "$effective_test_ports" | tr ' ' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')"
+	run_source_file="$(build_run_source_file "$ip_version" "$source_ip_file" "$manual_file")"
+
+	if [ "$ip_version" = "v6" ] && ! has_ipv6_route; then
+		log "skip IPv6 test: no IPv6 default route"
+		rm -f "$run_source_file"
+		return 2
+	fi
+	if [ ! -f "$source_ip_file" ]; then
+		set_status "error" "missing ${label} ip file: $source_ip_file"
+		rm -f "$run_source_file"
+		return 1
+	fi
+
+	log "starting ${label} custom cfst with $(wc -l < "$run_source_file" 2>/dev/null || echo 0) source ranges (ports: $effective_test_ports)"
+	echo "===== ${label} custom flow $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$CFST_LOG"
+	set_status "running" "${label} 正在优选：端口 ${effective_test_ports}"
+	if ! cfst $CFST_ARGS -custom-flow -f "$run_source_file" -url "$test_url" -o "$result_file" -p 0 \
+		-custom-display 0 -custom-top "$MEASURE_TOP_N" -custom-repeat "$SPEED_TEST_REPEAT" \
+		-custom-threads "$MEASURE_THREADS" -custom-cache "$cache_file" \
+		-custom-cache-limit "$CACHE_LIMIT" -custom-cache-fill-top "$CACHE_FILL_TOP_N" \
+		-custom-cache-threshold "$SPEED_CACHE_THRESHOLD_MB" -custom-fail-limit "$FAIL_LIMIT" \
+		-custom-ports "$custom_ports_csv" -custom-include-443=false >> "$CFST_LOG" 2>&1; then
+		rm -f "$run_source_file"
+		set_status "error" "${label} 优选失败，请检查日志"
+		return 1
+	fi
+
+	if [ ! -f "$result_file" ] || ! awk 'NR==2{found=1} END{exit found?0:1}' "$result_file" 2>/dev/null; then
+		rm -f "$run_source_file"
+		set_status "error" "${label} 结果文件缺失"
+		return 1
+	fi
+
+	save_result_state "$ip_version" "$result_file"
+	normalize_cache_file "$ip_version"
+	sync_manual_file_with_cache "$ip_version"
+	best_log_line="$(awk -F',' '
+	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
+	NR == 2 {
+		printf "best=%s:%s speed=%sMB/s latency=%sms colo=%s country=%s city=%s",
+			trim($1), trim($8), trim($6), trim($5), trim($7), trim($9), trim($10)
+		exit
+	}' "$result_file" 2>/dev/null || true)"
+	[ -n "$best_log_line" ] && log "${label} result summary: ${best_log_line}"
+	log "${label} completed: $result_file"
+	rm -f "$run_source_file"
+	return 0
+}
+
+run_once() {
+	require_command cfst
+	require_command awk
+	require_command ip
+	require_command curl
+	require_command openssl
+
+	enabled="$(cfg enabled 0)"
+	[ "$enabled" = "1" ] || exit 0
+
+	ensure_cache_dirs
+	normalize_cache_file v4
+	normalize_cache_file v6
+	normalize_manual_file v4
+	normalize_manual_file v6
+
+	ip_mode="$(cfg ip_mode dual)"
+	include_443="$(cfg include_443 1)"
+	custom_ports="$(cfg custom_ports)"
+	test_ports="$(resolve_test_ports "$custom_ports" "$include_443")"
+	result_file="$(cfg result_file "$DEFAULT_RESULT_FILE")"
+
+	case "$ip_mode" in
+		v4) test_versions="v4" ;;
+		v6) test_versions="v6" ;;
+		*) test_versions="v4 v6" ;;
+	esac
+
+	mkdir -p "$WORKDIR"
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		set_status "running" "已有任务正在运行"
+		exit 0
+	fi
+	echo "$$" > "$LOCK_DIR/pid"
+	trap 'cleanup_run' EXIT INT TERM HUP
+
+	: > "$LOG_FILE"
+	: > "$CFST_LOG"
+	: > "$BACKGROUND_LOG"
+	clear_result_state
+	set_status "running" "本轮优选已启动，正在准备环境"
+	log "run started: mode=${ip_mode}, ports=${test_ports}, url=$(cfg test_url "$DEFAULT_TEST_URL")"
+	stop_active_proxy_services
+	set_status "running" "代理已停止，准备开始优选"
+	log "stage 1/3 complete: proxies stopped"
+	success_any=0
+	for ip_version in $test_versions; do
+		target_result="$(result_file_for_version "$result_file" "$ip_version")"
+		log "stage 2/3 start: testing $(version_label "$ip_version")"
+		if run_cfst_for_version "$ip_version" "$target_result" "$test_ports"; then
+			success_any=1
+		fi
+	done
+
+	if [ "$success_any" -eq 1 ]; then
+		set_status "ok" "本轮优选完成：模式 ${ip_mode}，端口 ${test_ports}"
+		log "stage 3/3 complete: results saved, proxy restore will run during cleanup"
+		log "run complete"
+	else
+		set_status "error" "本轮优选未产出有效结果"
+		exit 1
+	fi
+}
+
+run_background() {
+	enabled="$(cfg enabled 0)"
+	ip_mode="$(cfg ip_mode dual)"
+	include_443="$(cfg include_443 1)"
+	custom_ports="$(cfg custom_ports)"
+	test_ports="$(resolve_test_ports "$custom_ports" "$include_443")"
+	if [ "$enabled" != "1" ]; then
+		set_status "error" "服务未启用"
+		exit 1
+	fi
+	if [ -d "$LOCK_DIR" ]; then
+		set_status "running" "已有任务正在运行"
+		echo "already running"
+		return 0
+	fi
+	: > "$BACKGROUND_LOG"
+	set_status "running" "本轮优选任务已启动：模式 ${ip_mode}，端口 ${test_ports}"
+	rm -f "$BACKGROUND_PID"
+	start-stop-daemon -S -b -m -p "$BACKGROUND_PID" -x /bin/sh -- -c "exec /usr/bin/cf-ip-speed-client run > '$BACKGROUND_LOG' 2>&1 < /dev/null"
+	echo "已启动后台任务"
+}
+
+stop_background() {
+	mkdir -p "$WORKDIR"
+	stop_requested=0
+	set_status "running" "正在停止本轮优选任务"
+
+	if [ -f "$BACKGROUND_PID" ]; then
+		bg_pid="$(cat "$BACKGROUND_PID" 2>/dev/null || true)"
+		if [ -n "$bg_pid" ] && kill -0 "$bg_pid" 2>/dev/null; then
+			log "stop requested: background pid=${bg_pid}"
+			terminate_pid "$bg_pid"
+			stop_requested=1
+		fi
+	fi
+
+	if [ -d "$LOCK_DIR" ]; then
+		run_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+		if [ -n "$run_pid" ] && kill -0 "$run_pid" 2>/dev/null; then
+			log "stop requested: run pid=${run_pid}"
+			terminate_pid "$run_pid"
+			stop_requested=1
+		fi
+	fi
+
+	sleep 1
+	cleanup_run
+
+	if [ "$stop_requested" -eq 1 ]; then
+		set_status "ok" "本轮优选已停止"
+		log "run stopped by user"
+		echo "stopped"
+	else
+		set_status "ok" "当前没有运行中的任务"
+		echo "not running"
+	fi
+}
+
+run_downstream_only() {
+	resume_version="${1:-v4}"
+	resume_result_file="${2:-}"
+	resume_label="$(version_label "$resume_version")"
+
+	require_command awk
+	require_command curl
+	require_command openssl
+
+	[ -n "$resume_result_file" ] || {
+		set_status "error" "missing result file"
+		exit 1
+	}
+	[ -f "$resume_result_file" ] || {
+		set_status "error" "result file not found: $resume_result_file"
+		exit 1
+	}
+
+	ensure_cache_dirs
+	normalize_cache_file v4
+	normalize_cache_file v6
+	set_status "running" "${resume_label} 续跑中：使用现有 cfst 结果"
+	log "${resume_label} downstream-only start: ${resume_result_file}"
+	save_result_state "$resume_version" "$resume_result_file"
+	set_status "ok" "${resume_label} 后半段验证完成"
+	log "${resume_label} downstream-only complete"
+}
+
+run_downstream_test() {
+	test_version="${1:-v4}"
+	test_result_file="${2:-}"
+	test_top_n="${3:-3}"
+	test_repeat="${4:-1}"
+	test_threads="${5:-1}"
+
+	MEASURE_TOP_N="$test_top_n"
+	SPEED_TEST_REPEAT="$test_repeat"
+	MEASURE_THREADS="$test_threads"
+	run_downstream_only "$test_version" "$test_result_file"
+}
+
+probe_target() {
+	probe_version="${1:-v4}"
+	probe_ip="${2:-}"
+	probe_port="${3:-443}"
+
+	require_command curl
+	[ -n "$probe_ip" ] || {
+		echo "missing ip"
+		exit 1
+	}
+	measure_target_meta "$probe_version" "$probe_ip" "$probe_port"
+}
+
+show_logs() {
+	echo "===== 状态 ====="
+	echo "状态: $(cfg last_status idle)"
+	echo "说明: $(cfg last_message idle)"
+	echo "时间: $(cfg last_run_at never)"
+	echo
+	echo "===== 运行日志 ====="
+	[ -f "$LOG_FILE" ] && cat "$LOG_FILE"
+	echo
+	echo "===== cfst 明细 ====="
+	[ -f "$CFST_LOG" ] && cat "$CFST_LOG"
+	if [ -s "$BACKGROUND_LOG" ]; then
+		echo
+		echo "===== 后台输出 ====="
+		cat "$BACKGROUND_LOG"
+	fi
+}
+
+show_status() {
+	echo "$(cfg last_status idle)"
+	echo "$(cfg last_message idle)"
+}
+
+clear_logs() {
+	mkdir -p "$WORKDIR"
+	: > "$LOG_FILE"
+	: > "$CFST_LOG"
+	: > "$BACKGROUND_LOG"
+	set_status "ok" "日志已清空"
+	echo "logs cleared"
+}
+
+install_cron() {
+	enabled="$(cfg enabled 0)"
+	schedule_mode="$(cfg schedule_mode daily)"
+	interval_hours="$(cfg interval_hours 6)"
+	daily_hour="$(cfg daily_hour 3)"
+	daily_minute="$(cfg daily_minute 0)"
+	log_clear_interval="$(cfg log_clear_interval weekly)"
+	sed -i "\|# cf-ip-speed-client|d" /etc/crontabs/root 2>/dev/null || true
+
+	if [ "$enabled" = "1" ]; then
+		case "$schedule_mode" in
+			daily) echo "${daily_minute} ${daily_hour} * * * /usr/bin/cf-ip-speed-client run # cf-ip-speed-client" >> /etc/crontabs/root ;;
+			*) echo "0 */${interval_hours} * * * /usr/bin/cf-ip-speed-client run # cf-ip-speed-client" >> /etc/crontabs/root ;;
+		esac
+	fi
+
+	case "$log_clear_interval" in
+		daily) echo "15 4 * * * /usr/bin/cf-ip-speed-client clear-log # cf-ip-speed-client-log" >> /etc/crontabs/root ;;
+		weekly) echo "20 4 * * 0 /usr/bin/cf-ip-speed-client clear-log # cf-ip-speed-client-log" >> /etc/crontabs/root ;;
+		monthly) echo "25 4 1 * * /usr/bin/cf-ip-speed-client clear-log # cf-ip-speed-client-log" >> /etc/crontabs/root ;;
+	esac
+
+	/etc/init.d/cron reload >/dev/null 2>&1 || true
+	set_status "ok" "cron updated"
+}
+
+case "${1:-run}" in
+	run) run_once ;;
+	run-background) run_background ;;
+	stop-background) stop_background ;;
+	run-downstream) run_downstream_only "${2:-v4}" "${3:-}" ;;
+	run-downstream-test) run_downstream_test "${2:-v4}" "${3:-}" "${4:-3}" "${5:-1}" "${6:-1}" ;;
+	probe-target) probe_target "${2:-v4}" "${3:-}" "${4:-443}" ;;
+	cron) install_cron ;;
+	show-log) show_logs ;;
+	show-status) show_status ;;
+	clear-log) clear_logs ;;
+	show-cache) show_cache "${2:-all}" ;;
+	show-manual) show_manual ;;
+	clear-cache) clear_cache ;;
+	normalize-cache) normalize_cache_all ;;
+	import-cache-base64) import_cache_base64 "$2" "$3" ;;
+	import-manual-base64) import_manual_base64 "${2:-}" ;;
+	*) echo "Usage: $0 {run|run-background|stop-background|cron|show-log|show-status|clear-log|show-cache|show-manual|clear-cache|normalize-cache|import-cache-base64|import-manual-base64}" >&2; exit 1 ;;
+esac

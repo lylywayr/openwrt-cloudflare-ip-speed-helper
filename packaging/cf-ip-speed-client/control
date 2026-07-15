@@ -1,0 +1,8 @@
+Package: cf-ip-speed-client
+Version: @VERSION@
+Depends: libc, curl, ca-bundle, ip-full, jsonfilter, openssl-util
+License: MIT
+Section: net
+Architecture: all
+Maintainer: lylywayr <lylywayr@users.noreply.github.com>
+Description: Cloudflare preferred IP speed test client for OpenWrt / iStoreOS.

@@ -1,0 +1,8 @@
+Package: luci-app-cf-ip-speed-client
+Version: @VERSION@
+Depends: libc, cf-ip-speed-client, luci-base
+License: MIT
+Section: luci
+Architecture: all
+Maintainer: lylywayr <lylywayr@users.noreply.github.com>
+Description: LuCI web interface for Cloudflare preferred IP speed helper.
