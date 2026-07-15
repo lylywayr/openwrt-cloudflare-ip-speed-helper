@@ -10,6 +10,25 @@ CFST_TAG="${CFST_TAG:-v2.3.5}"
 CFST_BASE_URL="https://github.com/${CFST_REPO}/releases/download/${CFST_TAG}"
 TMP_DIR="/tmp/cf-ip-speed-install"
 BACKUP_DIR="/tmp/cf-ip-speed-backup-$(date +%Y%m%d-%H%M%S)"
+SCRIPT_DIR=""
+LOCAL_REPO_ROOT=""
+LOCAL_CFST_BIN=""
+
+case "${0:-}" in
+  */*)
+    SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd || true)"
+    ;;
+esac
+
+if [ -n "$SCRIPT_DIR" ] && \
+  [ -d "$SCRIPT_DIR/packages/cf-ip-speed-client/files" ] && \
+  [ -d "$SCRIPT_DIR/packages/luci-app-cf-ip-speed-client/files" ]; then
+  LOCAL_REPO_ROOT="$SCRIPT_DIR"
+fi
+
+if [ -n "$LOCAL_REPO_ROOT" ] && [ -f "$LOCAL_REPO_ROOT/offline-assets/cfst" ]; then
+  LOCAL_CFST_BIN="$LOCAL_REPO_ROOT/offline-assets/cfst"
+fi
 
 fail() {
   echo "ERROR: $*" >&2
@@ -44,6 +63,10 @@ download() {
 download_raw() {
   path="$1"
   output="$2"
+  if [ -n "$LOCAL_REPO_ROOT" ] && [ -f "${LOCAL_REPO_ROOT}/${path}" ]; then
+    cp -f "${LOCAL_REPO_ROOT}/${path}" "$output"
+    return
+  fi
   download "${RAW_BASE}/${path}" "$output"
 }
 
@@ -124,6 +147,12 @@ backup_existing() {
 install_cfst() {
   if has_cmd cfst && [ "${CFST_FORCE_INSTALL:-0}" != "1" ]; then
     info "已检测到 cfst：$(command -v cfst)"
+    return
+  fi
+
+  if [ -n "$LOCAL_CFST_BIN" ] && [ -f "$LOCAL_CFST_BIN" ]; then
+    info "安装离线整包内置 cfst"
+    install -m 755 "$LOCAL_CFST_BIN" /usr/bin/cfst
     return
   fi
 
@@ -211,6 +240,10 @@ need_cmd uci
 
 rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR"
+
+if [ -n "$LOCAL_REPO_ROOT" ]; then
+  info "检测到本地离线整包，优先使用本地文件安装"
+fi
 
 install_deps
 backup_existing
