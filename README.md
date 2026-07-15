@@ -42,6 +42,20 @@ scripts/
 install.sh
 ```
 
+## 截图
+
+### 基本设置
+
+![基本设置](docs/screenshots/basic.jpg)
+
+### 缓存管理
+
+![缓存管理](docs/screenshots/cache.jpg)
+
+### 实时日志
+
+![实时日志](docs/screenshots/log.jpg)
+
 ## 安装
 
 ### 方式 1：一键安装
@@ -158,6 +172,67 @@ dist/
 - `cfst` 资源默认来自 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest)
 - 这套逻辑默认会在优选时停止常见代理服务；请不要在关键业务时间段直接启动优选
 - 首次安装后建议先检查 `测试地址`、`IP 模式`、`端口`、`执行计划`
+
+## 常见问题
+
+### 1. 页面更新了，但 LuCI 还是旧界面
+
+清理 LuCI 缓存，或直接重启 `uhttpd`：
+
+```sh
+rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
+/etc/init.d/uhttpd restart
+```
+
+### 2. 为什么优选开始后代理会停掉
+
+设计如此。优选测速要尽量走本机真实出口，否则测速结果会混入代理链路，失真。
+
+### 3. 缓存为什么没有数据
+
+常见原因：
+
+- 刚装完还没跑过一轮
+- 测试地址不可用
+- `cfst` 不存在或执行失败
+- 前端缓存未刷新
+
+先看：
+
+```sh
+/usr/bin/cf-ip-speed-client show-status
+/usr/bin/cf-ip-speed-client show-log
+```
+
+### 4. 手动添加的 IP 为什么又没了
+
+手动添加只是加入下一轮候选。若测速不达标、未进入自动缓存，会被同步清掉。这是当前设计。
+
+### 5. 多端口没有生效怎么办
+
+检查：
+
+- `始终包含 443 端口` 是否开启
+- `自定义端口` 是否用英文逗号分隔
+- 当前 `测试地址` 是否允许这些端口
+
+### 6. 如何只升级面板和脚本，不重装整机
+
+直接重跑安装脚本即可：
+
+```sh
+wget -qO- https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh | sh
+```
+
+### 7. 适合哪些系统
+
+当前主测：
+
+- iStoreOS
+- OpenWrt 23 / 24
+- `opkg` 环境
+
+其他发行版可参考仓库源码手动落文件。
 
 ## 许可证
 

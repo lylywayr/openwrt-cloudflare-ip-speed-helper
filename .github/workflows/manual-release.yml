@@ -1,0 +1,57 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to write into VERSION. Leave empty to use current file."
+        required: false
+        default: ""
+      tag:
+        description: "Release tag. Leave empty to use v<VERSION>."
+        required: false
+        default: ""
+      publish_release:
+        description: "Create or update GitHub Release"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        if: ${{ inputs.version != '' }}
+        run: printf '%s\n' '${{ inputs.version }}' > VERSION
+
+      - name: Build release assets
+        run: bash ./scripts/build-release.sh
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+
+      - name: Publish GitHub Release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          VERSION="$(cat VERSION)"
+          TAG="${{ inputs.tag }}"
+          [ -n "$TAG" ] || TAG="v${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes
+          fi

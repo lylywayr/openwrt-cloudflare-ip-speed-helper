@@ -24,6 +24,20 @@ Includes:
 - Live log panel
 - Stops common proxy services before testing, restores after finish
 
+## Screenshots
+
+### Basic settings
+
+![Basic settings](docs/screenshots/basic.jpg)
+
+### Cache management
+
+![Cache management](docs/screenshots/cache.jpg)
+
+### Live log
+
+![Live log](docs/screenshots/log.jpg)
+
 ## Install
 
 ### Method 1: one-line installer
