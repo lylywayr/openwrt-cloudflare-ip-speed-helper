@@ -626,6 +626,32 @@ return view.extend({
     o.description = '多个端口请用英文逗号分隔；不填写时仅使用 443。';
     o.rmempty = true;
 
+    o = s.taboption('basic', form.Flag, 'edgetunnel_sync_enabled', '同步到 edgetunnel');
+    o.default = '0';
+    o.rmempty = false;
+
+    o = s.taboption('basic', form.Value, 'edgetunnel_sync_url', 'edgetunnel 面板地址');
+    o.placeholder = 'https://cfyx.lylywayr.asia';
+    o.rmempty = true;
+    o.depends('edgetunnel_sync_enabled', '1');
+
+    o = s.taboption('basic', form.Value, 'edgetunnel_sync_password', 'edgetunnel 面板密码');
+    o.password = true;
+    o.rmempty = true;
+    o.depends('edgetunnel_sync_enabled', '1');
+
+    o = s.taboption('basic', form.Value, 'edgetunnel_sync_v4_count', '同步 IPv4 数量');
+    o.default = '20';
+    o.datatype = 'range(0,100)';
+    o.rmempty = false;
+    o.depends('edgetunnel_sync_enabled', '1');
+
+    o = s.taboption('basic', form.Value, 'edgetunnel_sync_v6_count', '同步 IPv6 数量');
+    o.default = '10';
+    o.datatype = 'range(0,100)';
+    o.rmempty = false;
+    o.depends('edgetunnel_sync_enabled', '1');
+
     o = s.taboption('basic', form.Value, 'test_url', '测速地址');
     o.placeholder = 'https://cfspeed.example.com/__down?bytes=10485760';
     o.rmempty = true;

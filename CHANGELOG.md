@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3
+
+- Add optional edgetunnel ADD.txt sync after each successful speed test run.
+- Sync replaces the remote ADD.txt with the latest local cache result, so stale IPs are removed.
+- Add LuCI and UCI options for edgetunnel URL, password, IPv4 count, and IPv6 count.
+- Keep edgetunnel sync disabled by default and do not store any panel password in the repository.
+
 ## v0.2.2
 
 - 新增离线整包安装产物，内置 `cfst`

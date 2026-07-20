@@ -752,6 +752,81 @@ normalize_cache_all() {
 	echo "cache normalized"
 }
 
+format_edgetunnel_add_from_cache() {
+	v4_count="$(cfg edgetunnel_sync_v4_count 20)"
+	v6_count="$(cfg edgetunnel_sync_v6_count 10)"
+	tmp_file="${WORKDIR}/edgetunnel-add.txt"
+	: > "$tmp_file"
+
+	awk -F',' -v limit="$v4_count" '
+	NF && count < limit {
+		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
+		speed=($9 == "" ? "0.00" : $9) + 0; latency=($10 == "" ? "999999" : $10) + 0;
+		if (speed <= 0 || latency <= 0) next;
+		printf "%s:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
+		count++;
+	}' "$CACHE_V4_FILE" >> "$tmp_file"
+
+	awk -F',' -v limit="$v6_count" '
+	NF && count < limit {
+		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
+		speed=($9 == "" ? "0.00" : $9) + 0; latency=($10 == "" ? "999999" : $10) + 0;
+		if (speed <= 0 || latency <= 0) next;
+		printf "[%s]:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
+		count++;
+	}' "$CACHE_V6_FILE" >> "$tmp_file"
+
+	echo "$tmp_file"
+}
+
+sync_edgetunnel_add() {
+	enabled="$(cfg edgetunnel_sync_enabled 0)"
+	[ "$enabled" = "1" ] || return 0
+
+	base_url="$(cfg edgetunnel_sync_url)"
+	password="$(cfg edgetunnel_sync_password)"
+	[ -n "$base_url" ] || {
+		log "edgetunnel sync skipped: missing URL"
+		return 0
+	}
+	[ -n "$password" ] || {
+		log "edgetunnel sync skipped: missing password"
+		return 0
+	}
+
+	case "$base_url" in
+		*/) base_url="${base_url%/}" ;;
+	esac
+
+	cookie_file="${WORKDIR}/edgetunnel-cookie.txt"
+	add_file="$(format_edgetunnel_add_from_cache)"
+	if ! awk 'NF{found=1} END{exit found?0:1}' "$add_file"; then
+		log "edgetunnel sync skipped: no ADD.txt rows"
+		return 0
+	fi
+
+	log "edgetunnel sync start: ${base_url}/admin/ADD.txt"
+	if ! curl -kfsS -A 'cf-ip-speed-client' -c "$cookie_file" -b "$cookie_file" \
+		-H 'Content-Type: application/x-www-form-urlencoded' \
+		--data-urlencode "password=${password}" \
+		"${base_url}/login" >/dev/null; then
+		log "edgetunnel sync failed: login request failed"
+		return 1
+	fi
+
+	if ! curl -kfsS -A 'cf-ip-speed-client' -b "$cookie_file" \
+		-H 'Content-Type: text/plain;charset=utf-8' \
+		--data-binary "@${add_file}" \
+		"${base_url}/admin/ADD.txt" >/dev/null; then
+		log "edgetunnel sync failed: ADD.txt upload failed"
+		return 1
+	fi
+
+	row_count="$(awk 'NF{c++} END{print c+0}' "$add_file")"
+	log "edgetunnel sync complete: ${row_count} rows uploaded"
+	return 0
+}
+
 clear_result_state() {
 	for ip_version in v4 v6; do
 		for field in ip port speed latency loss colo country city result_file updated_at topn; do
@@ -1179,6 +1254,7 @@ run_once() {
 	restore_proxy_services
 
 	if [ "$success_any" -eq 1 ]; then
+		sync_edgetunnel_add || log "edgetunnel sync finished with error"
 		set_status "ok" "本轮优选完成，代理已恢复：模式 ${ip_mode}，端口 ${test_ports}"
 		log "stage 3/3 complete: results saved, proxies restored"
 		log "run complete"

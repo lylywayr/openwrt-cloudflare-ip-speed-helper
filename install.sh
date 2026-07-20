@@ -186,6 +186,11 @@ apply_defaults() {
   uci -q get cf_ip_speed_client.main.daily_hour >/dev/null || uci set cf_ip_speed_client.main.daily_hour='3'
   uci -q get cf_ip_speed_client.main.daily_minute >/dev/null || uci set cf_ip_speed_client.main.daily_minute='0'
   uci -q get cf_ip_speed_client.main.result_file >/dev/null || uci set cf_ip_speed_client.main.result_file='/tmp/cf-ip-speed-client/result.csv'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_enabled >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_enabled='0'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_url >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_url=''
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_password >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_password=''
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_v4_count >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_v4_count='20'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_v6_count >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_v6_count='10'
   uci -q get cf_ip_speed_client.main.log_clear_interval >/dev/null || uci set cf_ip_speed_client.main.log_clear_interval='weekly'
   uci commit cf_ip_speed_client
 }

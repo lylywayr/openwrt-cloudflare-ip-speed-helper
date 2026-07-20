@@ -90,7 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-spee
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.2 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.3 sh /tmp/cf-ip-speed-install.sh
 ```
 
 它和方式 1 的区别只有一件事：
@@ -144,8 +144,8 @@ grep DISTRIB_ARCH /etc/openwrt_release
 
 ```sh
 cd /tmp
-tar -xzf cf-ip-speed-offline_x86_64_0.2.2.tar.gz
-cd cf-ip-speed-offline_x86_64_0.2.2
+tar -xzf cf-ip-speed-offline_x86_64_0.2.3.tar.gz
+cd cf-ip-speed-offline_x86_64_0.2.3
 sh ./install.sh
 ```
 
@@ -176,7 +176,7 @@ wget -qO- https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.2 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.3 sh /tmp/cf-ip-speed-install.sh
 ```
 
 ### 离线整包升级
@@ -231,13 +231,13 @@ dist/
 
 默认生成：
 
-- `cf-ip-speed-client_0.2.2_all.ipk`
-- `luci-app-cf-ip-speed-client_0.2.2_all.ipk`
+- `cf-ip-speed-client_0.2.3_all.ipk`
+- `luci-app-cf-ip-speed-client_0.2.3_all.ipk`
 - `install.sh`
-- `cf-ip-speed-offline_x86_64_0.2.2.tar.gz`
-- `cf-ip-speed-offline_arm64_0.2.2.tar.gz`
-- `cf-ip-speed-offline_armv7_0.2.2.tar.gz`
-- `cf-ip-speed-offline_mips_0.2.2.tar.gz`
+- `cf-ip-speed-offline_x86_64_0.2.3.tar.gz`
+- `cf-ip-speed-offline_arm64_0.2.3.tar.gz`
+- `cf-ip-speed-offline_armv7_0.2.3.tar.gz`
+- `cf-ip-speed-offline_mips_0.2.3.tar.gz`
 
 说明：
 
