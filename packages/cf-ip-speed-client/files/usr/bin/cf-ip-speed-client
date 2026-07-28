@@ -26,7 +26,7 @@ DISPLAY_TOP_N=5
 SPEED_TEST_REPEAT=3
 MEASURE_THREADS=6
 CACHE_FILL_TOP_N=100
-SPEED_CACHE_THRESHOLD_MB="12.50"
+SPEED_CACHE_THRESHOLD_MB="4.00"
 CACHE_LIMIT=100
 FAIL_LIMIT=10
 
@@ -1147,56 +1147,79 @@ run_cfst_for_version() {
 	test_url="$(cfg test_url "$DEFAULT_TEST_URL")"
 	manual_ports="$(resolve_manual_ports "$manual_file")"
 	effective_test_ports="$(merge_port_lists "$test_ports" "$manual_ports")"
-	custom_ports_csv="$(printf '%s\n' "$effective_test_ports" | tr ' ' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')"
 	run_source_file="$(build_run_source_file "$ip_version" "$source_ip_file" "$manual_file")"
 
-	if [ "$ip_version" = "v6" ] && ! has_ipv6_route; then
-		log "skip IPv6 test: no IPv6 default route"
-		rm -f "$run_source_file"
-		return 2
-	fi
 	if [ ! -f "$source_ip_file" ]; then
 		set_status "error" "missing ${label} ip file: $source_ip_file"
 		rm -f "$run_source_file"
 		return 1
 	fi
 
-	log "starting ${label} custom cfst with $(wc -l < "$run_source_file" 2>/dev/null || echo 0) source ranges (ports: $effective_test_ports)"
-	echo "===== ${label} custom flow $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$CFST_LOG"
+	[ -n "$effective_test_ports" ] || effective_test_ports="443"
+	log "starting ${label} cfst with $(wc -l < "$run_source_file" 2>/dev/null || echo 0) ranges, ports: $effective_test_ports"
+	echo "===== ${label} flow $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$CFST_LOG"
 	set_status "running" "${label} 正在优选：端口 ${effective_test_ports}"
-	if ! cfst $CFST_ARGS -custom-flow -f "$run_source_file" -url "$test_url" -o "$result_file" -p 0 \
-		-custom-display 0 -custom-top "$MEASURE_TOP_N" -custom-repeat "$SPEED_TEST_REPEAT" \
-		-custom-threads "$MEASURE_THREADS" -custom-cache "$cache_file" \
-		-custom-cache-limit "$CACHE_LIMIT" -custom-cache-fill-top "$CACHE_FILL_TOP_N" \
-		-custom-cache-threshold "$SPEED_CACHE_THRESHOLD_MB" -custom-fail-limit "$FAIL_LIMIT" \
-		-custom-ports "$custom_ports_csv" -custom-include-443=false >> "$CFST_LOG" 2>&1; then
-		rm -f "$run_source_file"
-		set_status "error" "${label} 优选失败，请检查日志"
+
+	# 多端口轮询：标准 cfst 只支持单端口，每个端口分别跑
+	all_merged="${result_file}.merged"
+	: > "$all_merged"
+	found_any=0
+
+	for cf_port in $effective_test_ports; do
+		port_log="${result_file}.port${cf_port}"
+		log "  ${label} testing port ${cf_port}..."
+		# 标准 cfst：延迟+下载测速
+		if cfst \
+			-n 60 -t 4 -dn "$MEASURE_TOP_N" -dt 10 \
+			-tp "$cf_port" \
+			-f "$run_source_file" \
+			-url "$test_url" \
+			-o "$port_log" \
+			-p 0 >> "$CFST_LOG" 2>&1; then
+			if [ -f "$port_log" ] && awk 'NR==2{found=1} END{exit found?0:1}' "$port_log" 2>/dev/null; then
+				found_any=1
+				# 格式转换：标准 cfst 7列 → 11列
+				exec 3< "$port_log"
+				read -r header <&3
+				while IFS=, read -r cf_ip cf_sent cf_recv cf_loss cf_latency cf_speed cf_colocode <&3; do
+					[ -n "$cf_ip" ] || continue
+					speed_ok=$(awk -v s="$cf_speed" -v t="$SPEED_CACHE_THRESHOLD_MB" 'BEGIN{print (s+0 >= t+0) ? 1 : 0}')
+					loss_ok=$(awk -v l="$cf_loss" 'BEGIN{print (l+0 == 0) ? 1 : 0}')
+					[ "$speed_ok" = "1" ] || continue
+					[ "$loss_ok" = "1" ] || continue
+					now_val="$(date '+%Y-%m-%d %H:%M:%S')"
+					printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s,%s\n' \
+						"$cf_ip" "$cf_latency" "$cf_speed" "$cf_colocode" "$cf_port" "" "" "$now_val" >> "$all_merged"
+				done
+				exec 3<&-
+			fi
+			rm -f "$port_log"
+		fi
+	done
+
+	if [ "$found_any" = "0" ]; then
+		log "${label} 所有端口优选均未产出有效结果"
+		rm -f "$all_merged" "$run_source_file"
+		set_status "error" "${label} 优选失败"
 		return 1
 	fi
 
-	if [ ! -f "$result_file" ] || ! awk 'NR==2{found=1} END{exit found?0:1}' "$result_file" 2>/dev/null; then
-		rm -f "$run_source_file"
-		set_status "error" "${label} 结果文件缺失"
-		return 1
-	fi
+	# 按速度排序取前 MEASURE_TOP_N
+	sort -t, -k6 -rn "$all_merged" | head -n "$MEASURE_TOP_N" > "$result_file"
+	rm -f "$all_merged"
+
+	# 更新缓存（取前 CACHE_FILL_TOP_N 行）
+	: > "$cache_file"
+	head -n "$CACHE_FILL_TOP_N" "$result_file" > "$cache_file"
 
 	save_result_state "$ip_version" "$result_file"
 	normalize_cache_file "$ip_version"
 	sync_manual_file_with_cache "$ip_version"
-	best_log_line="$(awk -F',' '
-	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
-	NR == 2 {
-		printf "best=%s:%s speed=%sMB/s latency=%sms colo=%s country=%s city=%s",
-			trim($1), trim($8), trim($6), trim($5), trim($7), trim($9), trim($10)
-		exit
-	}' "$result_file" 2>/dev/null || true)"
-	[ -n "$best_log_line" ] && log "${label} result summary: ${best_log_line}"
+
 	log "${label} completed: $result_file"
 	rm -f "$run_source_file"
 	return 0
 }
-
 run_once() {
 	require_command cfst
 	require_command awk
@@ -1258,6 +1281,13 @@ run_once() {
 		set_status "ok" "本轮优选完成，代理已恢复：模式 ${ip_mode}，端口 ${test_ports}"
 		log "stage 3/3 complete: results saved, proxies restored"
 		log "run complete"
+		# 优选完成自动部署
+		deploy_enabled="$(cfg deploy_enabled 0)"
+		if [ "$deploy_enabled" = "1" ]; then
+			log "auto deploy after run"
+			/usr/bin/cf-ip-speed-deploy >> "$LOG_FILE" 2>&1 || log "auto deploy failed"
+		fi
+
 	else
 		set_status "error" "本轮优选未产出有效结果，代理已恢复"
 		exit 1
