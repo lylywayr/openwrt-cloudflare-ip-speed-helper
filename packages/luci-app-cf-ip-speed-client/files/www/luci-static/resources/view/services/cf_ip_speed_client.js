@@ -620,6 +620,7 @@ o.rmempty = true;
       var cfDomainMode = uciGet(this.map, sectionId, 'cf_pages_domain_mode') || 'pages';
       var cfZone = uciGet(this.map, sectionId, 'cf_pages_zone') || '';
       var cfSubdomain = uciGet(this.map, sectionId, 'cf_pages_subdomain') || 'cfip';
+      var cfPagesToken = uciGet(this.map, sectionId, 'cf_pages_api_token');
 
       var lastStatus = uciGet(this.map, sectionId, 'last_status') || 'idle';
 
@@ -629,6 +630,7 @@ o.rmempty = true;
         var r = E('div', {style:'display:flex;gap:6px;align-items:center'});
         var i = E('input', {id:id, type:type||'text', value:val, placeholder:ph||'', class:'cbi-input-text', style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
         if (onChange) i.onchange = onChange;
+        i.onblur = function() { if (this.dataset && this.dataset.uciKey) sv(this.dataset.uciKey, this.value); };
         r.appendChild(i);
         if(type==='password'){var e=E('button',{type:'button',class:'cf-btn cf-btn-outline',style:'min-width:36px;height:40px;padding:0 12px'},'👁');e.onclick=function(){i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁':'🙈';};r.appendChild(e);}
         w.appendChild(r); return w;
@@ -767,9 +769,9 @@ o.rmempty = true;
       var consentActions=E('div',{style:'display:flex;justify-content:flex-end;gap:8px'});
       var cancelConsent=E('button',{type:'button',class:'cf-btn cf-btn-outline'},'取消');
       cancelConsent.onclick=function(){consentModal.style.display='none';ks.value='github';togglePlatform('github');sv('deploy_platform','github');};
-      var confirmConsent=E('button',{type:'button',class:'cf-btn cf-btn-primary',disabled:true},'同意并创建 Token');
+      var confirmConsent=E('button',{type:'button',class:'cf-btn cf-btn-primary',disabled:true},'同意授权');
       consentCheck.onchange=function(){confirmConsent.disabled=!this.checked;};
-      confirmConsent.onclick=function(){confirmConsent.disabled=true;confirmConsent.textContent='创建中...';sv('cf_pages_token_consent','1').then(function(){return fs.exec('/usr/bin/cf-ip-speed-pages-token-create');}).then(function(r){showSimpleModal('Pages 发布 Token',textOf(r));consentModal.style.display='none';}).catch(function(e){showSimpleModal('创建失败','未能创建 Pages 发布 Token，请检查凭据与账户权限。');confirmConsent.disabled=false;confirmConsent.textContent='同意并创建 Token';});};
+      confirmConsent.onclick=function(){confirmConsent.disabled=true;confirmConsent.textContent='保存中...';sv('cf_pages_token_consent','1').then(function(){showSimpleModal('已授权','已记录你的授权。系统将在首次需要发布、且没有可用 Token 时才创建 Pages 发布 Token；也可以在下方输入你自行创建的 Token。');consentModal.style.display='none';}).catch(function(e){showSimpleModal('保存失败','未能保存授权状态。');confirmConsent.disabled=false;confirmConsent.textContent='同意授权';});};
       consentActions.appendChild(cancelConsent);consentActions.appendChild(confirmConsent);consentCard.appendChild(consentActions);consentModal.appendChild(consentCard);document.body.appendChild(consentModal);
 
       var gd=E('div',{id:'cf-deploy-github-fields'});if(platform!=='github')gd.style.display='none';
@@ -789,6 +791,9 @@ o.rmempty = true;
         E('button',{type:'button',class:'cf-btn cf-btn-primary',onclick:function(){saveToken('cloudflare');window.setTimeout(configChanged,500);}},'保存'),
         E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var k=document.getElementById('cf-deploy-cf-key'),e=document.getElementById('cf-deploy-cf-email');if(k&&e&&k.value&&e.value)fs.exec('/usr/bin/cf-ip-speed-token-check',['cloudflare',k.value,e.value]).then(function(r){showSimpleModal('检查结果',textOf(r));});}},'检查')
       ]));
+      cfd.appendChild(inp('cf-deploy-pages-token','Pages 发布 API Token（可选）',cfPagesToken,'password','可自行创建并粘贴；留空则按授权在首次发布时创建'));
+      cfd.appendChild(E('div',{style:'font-size:12px;line-height:1.55;color:#64748b;margin:-4px 0 12px'},cfPagesToken ? '已保存 Pages 发布 Token（为安全起见不会显示内容）。' : '未保存 Pages 发布 Token：勾选授权后，系统仅在首次实际发布时自动创建。'));
+      cfd.appendChild(E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var v=document.getElementById('cf-deploy-pages-token');if(v&&v.value){sv('cf_pages_api_token',v.value).then(function(){ui.addNotification(null,E('p','Pages 发布 Token 已安全保存，不会显示。'));});}}},'保存自定义 Pages Token'));
 
       var pp=E('input',{id:'cf-deploy-cf-project',type:'text',value:cfProject,placeholder:'cloudflare-ip-speed-results',class:'cf-input',style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
       pp.onchange=function(){sv('cf_pages_project',this.value);window.setTimeout(configChanged,300);};
@@ -838,7 +843,11 @@ o.rmempty = true;
       cd.appendChild(E('textarea',{id:'cf-deploy-result',class:'cbi-input-textarea',style:'width:100%;min-height:80px;margin-top:10px;font-size:11px;font-family:monospace;border-radius:12px;padding:10px 12px;box-sizing:border-box',readonly:true,placeholder:'部署结果'}));
 
       c.appendChild(cd);
-      window.setTimeout(function(){computeDeployUrl();loadCfZones();}, 200);
+      window.setTimeout(function(){
+        var map = {'cf-deploy-gh-token':'github_token','cf-deploy-gh-repo':'deploy_repo','cf-deploy-gh-branch':'deploy_branch','cf-deploy-cf-key':'cloudflare_global_api_key','cf-deploy-cf-email':'cloudflare_email','cf-deploy-pages-token':'cf_pages_api_token','cf-deploy-cf-project':'cf_pages_project','cf-deploy-cf-subdomain':'cf_pages_subdomain'};
+        Object.keys(map).forEach(function(id){var el=document.getElementById(id);if(el){el.dataset.uciKey=map[id];el.onchange=(function(old,key){return function(){sv(key,this.value);if(old)old.call(this);};})(el.onchange,map[id]);}});
+        computeDeployUrl();loadCfZones();
+      }, 200);
       return c;
     }
 o.rmempty = true;
@@ -969,7 +978,20 @@ o.rmempty = true;
       });
     };
 
-    return m.render();
+    return m.render().then(function(node) {
+      // Persist every normal form input/select immediately. Deployment widgets
+      // use their explicit UCI binding above.
+      var timer = null;
+      function persist() {
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(function() {
+          m.save().then(function(){ return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']); }).catch(function(){});
+        }, 180);
+      }
+      node.addEventListener('change', function(ev) { var e=ev.target; if (e && /^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) && e.type !== 'button') persist(); }, true);
+      node.addEventListener('blur', function(ev) { var e=ev.target; if (e && /^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) && e.type !== 'button') persist(); }, true);
+      return node;
+    });
   }
 });
 
