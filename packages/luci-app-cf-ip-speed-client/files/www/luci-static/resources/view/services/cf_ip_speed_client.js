@@ -219,47 +219,19 @@ function sortCacheRows(rows) {
 }
 
 function renderReadonlyTable(title, rows, columns, emptyText, maxHeight) {
-  var countNode = E('span', { style: 'font-size:12px;color:#64748b' }, '共 ' + rows.length + ' 条');
-
-  return E('div', { style: 'margin-top:18px' }, [
-    E('div', {
-      style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:12px'
-    }, [
-      E('div', { style: 'font-size:18px;font-weight:700;color:#1e293b' }, title),
-      countNode
+  var c = E('div', { class: 'cf-glass', style: 'padding:16px;margin-top:14px' }, [
+    E('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' }, [
+      E('div', { style: 'font-size:14px;font-weight:600;color:#0f172a' }, title),
+      E('span', { style: 'font-size:11px;color:#94a3b8;font-weight:500' }, '共 ' + rows.length + ' 条')
     ]),
-    E('div', {
-      style: 'max-height:' + (maxHeight || 300) + 'px;overflow:auto;border:1px solid #d6e0eb;border-radius:12px;background:#fff'
-    }, [
-      E('table', {
-        style: 'border-collapse:collapse;min-width:1100px;width:max-content;font-size:11px;line-height:1.45'
-      }, [
-        E('thead', {}, [
-          E('tr', {}, columns.map(function(column) {
-            return E('th', {
-              style: 'position:sticky;top:0;z-index:3;background:#e2e8f0;border:1px solid #cbd5e1;padding:8px 6px;text-align:left;font-size:11px;white-space:nowrap;color:#0f172a;min-width:' + column.width
-            }, column.label);
-          }))
-        ]),
-        E('tbody', {}, rows.length
-          ? rows.map(function(row) {
-              return E('tr', {}, columns.map(function(column) {
-                return E('td', {
-                  style: 'border:1px solid #e2e8f0;padding:7px 6px;white-space:nowrap;background:#fff;color:#0f172a;max-width:' + column.width + ';overflow:hidden;text-overflow:ellipsis'
-                }, displayCellValue(row, column));
-              }));
-            })
-          : [
-              E('tr', {}, [
-                E('td', {
-                  colspan: String(columns.length),
-                  style: 'border:1px solid #e2e8f0;padding:20px 12px;text-align:center;color:#94a3b8;background:#fff'
-                }, emptyText || '暂无记录')
-              ])
-            ])
+    E('div', { style: 'max-height:' + (maxHeight||300) + 'px;overflow:auto;border-radius:12px;background:rgba(255,255,255,.5)' }, [
+      E('table', { style: 'border-collapse:collapse;min-width:800px;width:100%;font-size:11px;line-height:1.45' }, [
+        E('thead', {}, [E('tr', {}, columns.map(function(col) { return E('th', { style: 'position:sticky;top:0;z-index:2;background:rgba(226,232,240,.6);backdrop-filter:blur(8px);border-bottom:1px solid #e2e8f0;padding:9px 8px;text-align:left;font-size:10px;font-weight:600;color:#475569;letter-spacing:.3px;white-space:nowrap;min-width:'+col.width }, col.label); }))]),
+        E('tbody', {}, rows.length ? rows.map(function(r){return E('tr',{},columns.map(function(col){return E('td',{style:'border-bottom:1px solid #f1f5f9;padding:8px;white-space:nowrap;color:#334155;max-width:'+col.width+';overflow:hidden;text-overflow:ellipsis'},displayCellValue(r,col));}));}) : [E('tr',{},[E('td',{colspan:String(columns.length),style:'padding:24px 12px;text-align:center;color:#cbd5e1;font-size:12px'},emptyText||'暂无记录')])])
       ])
     ])
   ]);
+  return c;
 }
 
 function showSimpleModal(title, body, reload) {
@@ -402,70 +374,45 @@ function startLiveTimer() {
 function startLiveRun() {
   liveSeenRunning = true;
   liveAutoReloadDone = false;
-  setLivePanel('running', '本轮任务已启动，正在准备环境', '本轮日志初始化中...');
+  var sln = document.getElementById('cf-live-status');
+  if (sln) setLivePanel('running', '本轮任务已启动', '本轮日志初始化中...');
   startLiveTimer();
 }
 
 function stopLiveRun() {
   liveSeenRunning = true;
   liveAutoReloadDone = false;
-  setLivePanel('running', '正在停止本轮优选任务', '正在停止本轮优选任务，请稍候...');
+  var sln = document.getElementById('cf-live-status');
+  if (sln) setLivePanel('running', '正在停止本轮优选任务', '正在停止本轮优选任务，请稍候...');
   startLiveTimer();
 }
 
 function renderActionBar(map, initialStatus, initialMessage) {
-  var initialState = resolveRunState(initialStatus || 'idle', initialMessage || '');
-  var actionButtonStyle = 'flex:0 0 84px;min-height:40px;border-radius:12px;font-weight:700;font-size:13px;line-height:1;padding:0 6px;display:flex;align-items:center;justify-content:center;box-shadow:none';
-  var statePanelStyle = 'flex:1 1 auto;min-width:0;border:1px solid #dbe4f0;border-radius:12px;background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%);padding:6px 10px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;box-shadow:0 2px 8px rgba(15,23,42,0.04)';
-  if (initialStatus === 'running')
-    liveSeenRunning = true;
-
-  return E('div', {
-    style: 'display:flex;align-items:stretch;justify-content:space-between;gap:10px;margin:14px 0 12px 0;flex-wrap:nowrap'
-  }, [
-    E('button', {
-      type: 'button',
-      class: 'btn cbi-button cbi-button-action',
-      style: actionButtonStyle + ';background:#4f6cf6;border:1px solid #4862df;color:#fff',
-      click: function(ev) {
-        ev.preventDefault();
-        return saveAndCron(map).then(function() {
-          return fs.exec('/usr/bin/cf-ip-speed-client', ['run-background']);
-        }).then(function() {
-          startLiveRun();
-        }).catch(function(error) {
-          showSimpleModal('执行失败', String(error && error.message ? error.message : error), false);
-        });
-      }
-    }, '开始优选'),
-    E('div', {
-      style: statePanelStyle
-    }, [
-      E('div', { style: 'font-size:10px;color:#64748b;line-height:1.2;letter-spacing:0.2px' }, '运行状态'),
-      E('div', {
-        id: 'cf-action-state-text',
-        style: 'font-size:16px;font-weight:800;line-height:1.25;color:' + initialState.color + ';margin-top:1px'
-      }, initialState.text),
-      E('div', {
-        id: 'cf-action-state-detail',
-        style: 'font-size:10px;line-height:1.2;color:#94a3b8;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px'
-      }, initialState.detail)
-    ]),
-    E('button', {
-      type: 'button',
-      class: 'btn cbi-button cbi-button-remove',
-      style: actionButtonStyle + ';background:#ff4d73;border:1px solid #ec4267;color:#fff',
-      click: function(ev) {
-        ev.preventDefault();
-        stopLiveRun();
-        return fs.exec('/usr/bin/cf-ip-speed-client', ['stop-background']).then(function() {
-          window.setTimeout(updateLiveArea, 800);
-          return null;
-        }).catch(function(error) {
-          showSimpleModal('停止失败', String(error && error.message ? error.message : error), false);
-        });
-      }
-    }, '停止优选')
+  var state = resolveRunState(initialStatus || 'idle', initialMessage || '');
+  if (initialStatus === 'running') liveSeenRunning = true;
+  return E('div', { style: 'background:linear-gradient(135deg,#667eea,#764ba2);border-radius:20px;padding:20px;color:#fff;margin:14px 0 12px' }, [
+    E('div', { style: 'display:flex;align-items:center;gap:16px;flex-wrap:wrap' }, [
+      E('div', { style: 'flex:1;min-width:120px' }, [
+        E('div', { style: 'font-size:11px;opacity:.8;letter-spacing:.5px' }, '运行状态'),
+        E('div', { id: 'cf-action-state-text', style: 'font-size:28px;font-weight:700;margin:4px 0 2px;color:' + (state.text==='运行中'?'#bbf7d0':state.text==='停止中'?'#fecaca':'#fff') }, state.text),
+        E('div', { id: 'cf-action-state-detail', style: 'font-size:11px;opacity:.6' }, state.detail)
+      ]),
+      E('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, [
+        E('button', { type: 'button', class: 'cf-btn', style: 'background:rgba(255,255,255,.2);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.3);border-radius:14px;padding:10px 22px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px',
+          click: function(ev) {
+            ev.preventDefault();
+            return fs.exec('/usr/bin/cf-ip-speed-client',['run-background']).then(function(r){startLiveRun();}).catch(function(e){showSimpleModal('执行失败',JSON.stringify(e));});
+          }
+        }, [E('span', {}, '▶'), '开始优选']),
+        E('button', { type: 'button', class: 'cf-btn', style: 'background:rgba(255,255,255,.15);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:10px 22px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px',
+          click: function(ev) {
+            ev.preventDefault();
+            stopLiveRun();
+            return fs.exec('/usr/bin/cf-ip-speed-client',['stop-background']).then(function(){window.setTimeout(updateLiveArea,800);return null;}).catch(function(e){showSimpleModal('停止失败',String(e&&e.message?e.message:e),false);});
+          }
+        }, [E('span', {}, '■'), '停止优选'])
+      ])
+    ])
   ]);
 }
 
@@ -555,6 +502,14 @@ function renderManualSection(manualText) {
   ]);
 }
 
+
+/* ====== 毛玻璃风格 ====== */
+(function(){
+  var s=document.createElement('style');
+  s.textContent='.cf-glass{background:rgba(255,255,255,.7);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(226,232,240,.8);border-radius:16px;padding:16px;box-shadow:0 4px 20px rgba(15,23,42,.04);transition:all .2s}.cf-glass:hover{box-shadow:0 8px 30px rgba(15,23,42,.08)}.cf-btn{display:inline-flex;align-items:center;justify-content:center;padding:8px 18px;border-radius:12px;font-size:12px;font-weight:600;line-height:1;border:none;cursor:pointer;transition:all .2s cubic-bezier(.4,0,.2,1)}.cf-btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;box-shadow:0 2px 8px rgba(102,126,234,.3)}.cf-btn-primary:hover{box-shadow:0 4px 16px rgba(102,126,234,.4);transform:translateY(-1px)}.cf-btn-outline{background:#fff;color:#475569;border:1px solid #e2e8f0}.cf-btn-outline:hover{background:#f8fafc;border-color:#cbd5e1}.cf-input{width:100%;box-sizing:border-box;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:12px;line-height:1.5;color:#1e293b;background:rgba(255,255,255,.5);transition:border-color .2s}.cf-input:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.12);background:#fff}.cf-select{width:100%;box-sizing:border-box;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:12px;color:#1e293b;background:rgba(255,255,255,.5)}.cf-select:focus{outline:none;border-color:#667eea}.cf-label{display:block;margin-bottom:4px;font-size:11px;font-weight:600;color:#64748b;letter-spacing:.3px}';
+  document.head.appendChild(s);
+})();
+
 return view.extend({
   load: function() {
     return Promise.all([
@@ -615,16 +570,19 @@ return view.extend({
     o.value('v6', '仅 IPv6');
     o.value('dual', 'IPv4 + IPv6');
     o.default = 'dual';
-    o.rmempty = false;
+    	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
+o.rmempty = false;
 
     o = s.taboption('basic', form.Flag, 'include_443', '始终包含 443 端口');
     o.default = '1';
-    o.rmempty = false;
+    	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
+o.rmempty = false;
 
     o = s.taboption('basic', form.Value, 'custom_ports', '自定义端口');
     o.placeholder = '8443, 2053, 2083';
     o.description = '多个端口请用英文逗号分隔；不填写时仅使用 443。';
-    o.rmempty = true;
+    	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
+o.rmempty = true;
 
     o = s.taboption('basic', form.Flag, 'edgetunnel_sync_enabled', '同步到 edgetunnel');
     o.default = '0';
@@ -652,9 +610,184 @@ return view.extend({
     o.rmempty = false;
     o.depends('edgetunnel_sync_enabled', '1');
 
-    o = s.taboption('basic', form.Value, 'test_url', '测速地址');
-    o.placeholder = 'https://cfspeed.example.com/__down?bytes=10485760';
-    o.rmempty = true;
+    var deployArea = s.taboption('basic', form.DummyValue, '_deploy_area', '\u7ed3\u679c\u90e8\u7f72');
+    deployArea.rawhtml = true;
+    deployArea.cfgvalue = function(sectionId) {
+      var enabled = uciGet(this.map, sectionId, 'deploy_enabled');
+      var platform = uciGet(this.map, sectionId, 'deploy_platform') || 'github';
+      var githubToken = uciGet(this.map, sectionId, 'github_token');
+      var cfKey = uciGet(this.map, sectionId, 'cloudflare_global_api_key');
+      var cfEmail = uciGet(this.map, sectionId, 'cloudflare_email');
+      var repo = uciGet(this.map, sectionId, 'deploy_repo') || 'cloudflare-ip-speed-results';
+      var cfProject = uciGet(this.map, sectionId, 'cf_pages_project') || 'cloudflare-ip-speed-results';
+      var cfDomainMode = uciGet(this.map, sectionId, 'cf_pages_domain_mode') || 'pages';
+      var cfZone = uciGet(this.map, sectionId, 'cf_pages_zone') || '';
+      var cfSubdomain = uciGet(this.map, sectionId, 'cf_pages_subdomain') || 'cfip';
+
+      var lastStatus = uciGet(this.map, sectionId, 'last_status') || 'idle';
+
+      function inp(id, label, val, type, ph, onChange) {
+        var w = E('div', {style:'margin:10px 0'});
+        w.appendChild(E('label', {class:'cf-label'}, label));
+        var r = E('div', {style:'display:flex;gap:6px;align-items:center'});
+        var i = E('input', {id:id, type:type||'text', value:val, placeholder:ph||'', class:'cbi-input-text', style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+        if (onChange) i.onchange = onChange;
+        r.appendChild(i);
+        if(type==='password'){var e=E('button',{type:'button',class:'cf-btn cf-btn-outline',style:'min-width:36px;height:40px;padding:0 12px'},'👁');e.onclick=function(){i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁':'🙈';};r.appendChild(e);}
+        w.appendChild(r); return w;
+      }
+      function sv(key, value) {
+        return fs.exec('/usr/bin/cf-ip-speed-uci', ['set', 'cf_ip_speed_client.main.' + key + '=' + value]).then(function() {
+          return fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']);
+        }).catch(function() {});
+      }
+      function deployNow() {
+        var db = document.getElementById('cf-deploy-btn');
+        if (!db || db.disabled) return;
+        db.disabled = true; db.textContent = '部署中...';
+        fs.exec('/usr/bin/cf-ip-speed-deploy').then(function(r) {
+          var out = textOf(r);
+          var el = document.getElementById('cf-deploy-result');
+          if (el) el.value = out;
+          db.disabled = false; db.textContent = '立即部署';
+          updateStatusHint('deployed');
+        }).catch(function(e) {
+          db.disabled = false; db.textContent = '立即部署';
+          updateStatusHint('error');
+        });
+      }
+      function updateStatusHint(state) {
+        var el = document.getElementById('cf-deploy-status-hint');
+        if (!el) return;
+        if (state === 'deployed') {
+          el.innerHTML = '<span style="color:#059669;font-weight:600">✓ 部署已完成</span>';
+        } else if (state === 'error') {
+          el.innerHTML = '<span style="color:#dc2626;font-weight:600">✗ 部署失败，请检查配置</span>';
+        } else if (state === 'noresult') {
+          el.innerHTML = '<span style="color:#d97706;font-weight:600">⏳ 暂无优选结果，请先执行优选</span>';
+        } else if (state === 'deploying') {
+          el.innerHTML = '<span style="color:#2563eb;font-weight:600">⟳ 部署中...</span>';
+        } else {
+          el.innerHTML = '<span style="color:#64748b">配置后自动部署</span>';
+        }
+      }
+      function computeDeployUrl() {
+        var mode = document.getElementById('cf-deploy-cf-domain') ? document.getElementById('cf-deploy-cf-domain').value : 'pages';
+        var proj = document.getElementById('cf-deploy-cf-project') ? document.getElementById('cf-deploy-cf-project').value : 'cloudflare-ip-speed-results';
+        var sub = document.getElementById('cf-deploy-cf-subdomain') ? document.getElementById('cf-deploy-cf-subdomain').value : 'cfip';
+        var zone = document.getElementById('cf-deploy-cf-zone') ? document.getElementById('cf-deploy-cf-zone').value : '';
+        var url = '';
+        if (mode === 'pages' || !zone) {
+          url = 'https://' + proj + '.pages.dev';
+        } else {
+          url = 'https://' + sub + '.' + zone;
+        }
+        var el = document.getElementById('cf-deploy-url-display');
+        if (el) el.value = url;
+        return url;
+      }
+      function configChanged() {
+        computeDeployUrl();
+        // 有缓存结果直接部署，否则提示
+        var hasResult = (uciGet(this.map, 'main', 'last_status') === 'ok');
+        if (hasResult) {
+          deployNow();
+        } else {
+          updateStatusHint('noresult');
+        }
+      }
+
+      var c = E('div', {style:'border:1px solid #e8edf5;border-radius:16px;padding:16px;background:#fff;margin-top:4px'});
+      var h = E('div', {style:'display:flex;align-items:center;gap:10px;margin-bottom:6px'});
+      var chk = E('input', {type:'checkbox',id:'cf-deploy-enable',class:'cbi-input-checkbox'});
+      if(enabled==='1')chk.checked=true;
+      chk.onchange=function(){
+        var d=document.getElementById('cf-deploy-config');
+        if(d)d.style.display=this.checked?'':'none';
+        sv('deploy_enabled', this.checked?'1':'0');
+        if (this.checked) {
+          // 首次启用：有结果就部署，否则提示
+          if (lastStatus === 'ok') { deployNow(); }
+          else { updateStatusHint('noresult'); }
+        }
+      };
+      h.appendChild(chk); h.appendChild(E('label',{style:'font-weight:600;font-size:14px;color:#1e293b;cursor:pointer',onclick:function(){chk.click();}},'启用结果部署'));
+      c.appendChild(h);
+
+      // 状态提示
+      var hintBar = E('div',{id:'cf-deploy-status-hint',style:'margin:6px 0 10px;padding:8px 12px;border-radius:10px;font-size:12px'});
+      if (enabled === '1' && lastStatus === 'ok') {
+        hintBar.innerHTML = '<span style="color:#059669;font-weight:600">✓ 已有优选结果，配置后自动部署</span>';
+      } else if (enabled === '1' && lastStatus !== 'ok') {
+        hintBar.innerHTML = '<span style="color:#d97706;font-weight:600">⏳ 暂无优选结果，请先执行优选</span>';
+      }
+      c.appendChild(hintBar);
+
+      var cd = E('div',{id:'cf-deploy-config'}); if(enabled!=='1')cd.style.display='none';
+      cd.appendChild(E('div',{class:'cf-label'},'部署平台'));
+      var ks=E('select',{id:'cf-deploy-kind',class:'cbi-input-select',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+      ks.innerHTML='<option value="github">GitHub</option><option value="cloudflare">Cloudflare Pages</option>';ks.value=platform;
+      ks.onchange=function(){togglePlatform(this.value);sv('deploy_platform',this.value);window.setTimeout(configChanged,300);};
+      cd.appendChild(ks);
+
+      var gd=E('div',{id:'cf-deploy-github-fields'});if(platform!=='github')gd.style.display='none';
+      gd.appendChild(inp('cf-deploy-gh-token','GitHub Token',githubToken,'password','Personal Access Token'));
+      gd.appendChild(E('div', {style:'display:flex;gap:8px;margin:6px 0 14px'}, [
+        E('button',{type:'button',class:'cf-btn cf-btn-primary',onclick:function(){saveToken('github');window.setTimeout(configChanged,500);}},'保存'),
+        E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var v=document.getElementById('cf-deploy-gh-token');if(v&&v.value)fs.exec('/usr/bin/cf-ip-speed-token-check',['github',v.value]).then(function(r){showSimpleModal('检查结果',textOf(r));});}},'检查')
+      ]));
+      gd.appendChild(inp('cf-deploy-gh-repo','仓库名称',repo,'text','cloudflare-ip-speed-results'));
+      cd.appendChild(gd);
+
+      var cfd=E('div',{id:'cf-deploy-cf-fields'});if(platform!=='cloudflare')cfd.style.display='none';
+      cfd.appendChild(inp('cf-deploy-cf-key','Cloudflare Global API Key',cfKey,'password','Global API Key'));
+      cfd.appendChild(inp('cf-deploy-cf-email','Cloudflare 账户邮箱',cfEmail,'email','your@email.com'));
+      cfd.appendChild(E('div', {style:'display:flex;gap:8px;margin:6px 0 14px'}, [
+        E('button',{type:'button',class:'cf-btn cf-btn-primary',onclick:function(){saveToken('cloudflare');window.setTimeout(configChanged,500);}},'保存'),
+        E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var k=document.getElementById('cf-deploy-cf-key'),e=document.getElementById('cf-deploy-cf-email');if(k&&e&&k.value&&e.value)fs.exec('/usr/bin/cf-ip-speed-token-check',['cloudflare',k.value,e.value]).then(function(r){showSimpleModal('检查结果',textOf(r));});}},'检查')
+      ]));
+
+      var pp=E('input',{id:'cf-deploy-cf-project',type:'text',value:cfProject,placeholder:'cloudflare-ip-speed-results',class:'cf-input',style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+      pp.onchange=function(){sv('cf_pages_project',this.value);window.setTimeout(configChanged,300);};
+      var ppw=E('div',{style:'margin:8px 0'});ppw.appendChild(E('div',{class:'cf-label'},'Pages 项目名'));ppw.appendChild(E('div',{style:'display:flex;gap:6px;align-items:center'},[pp]));cfd.appendChild(ppw);
+
+      var dms=E('select',{id:'cf-deploy-cf-domain',class:'cbi-input-select',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+      dms.innerHTML='<option value="pages">使用 pages.dev 域名</option><option value="custom">使用已有顶级域名</option>';dms.value=cfDomainMode;
+      dms.onchange=function(){var w=document.getElementById('cf-deploy-cf-zone-wrap');if(w)w.style.display=this.value==='custom'?'':'none';sv('cf_pages_domain_mode',this.value);window.setTimeout(configChanged,300);};
+      cfd.appendChild(E('div',{class:'cf-label'},'域名方式')); cfd.appendChild(dms);
+
+      var zw=E('div',{id:'cf-deploy-cf-zone-wrap'});if(cfDomainMode!=='custom')zw.style.display='none';
+      zw.appendChild(E('div',{class:'cf-label'},'已有顶级域名（自动读取）'));
+      var zs=E('select',{id:'cf-deploy-cf-zone',class:'cbi-input-select',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+      zs.onchange=function(){sv('cf_pages_zone',this.value);window.setTimeout(configChanged,300);};
+      zs.innerHTML='<option value="">保存凭据后自动加载</option>';zw.appendChild(zs);cfd.appendChild(zw);
+
+      var sd=E('input',{id:'cf-deploy-cf-subdomain',type:'text',value:cfSubdomain,placeholder:'cfip',class:'cf-input',style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
+      sd.onchange=function(){sv('cf_pages_subdomain',this.value);window.setTimeout(configChanged,300);};
+      var sdw=E('div',{style:'margin:8px 0'});sdw.appendChild(E('div',{class:'cf-label'},'自定义二级域名'));sdw.appendChild(E('div',{style:'display:flex;gap:6px;align-items:center'},[sd]));cfd.appendChild(sdw);
+      cd.appendChild(cfd);
+
+      // 预先计算的部署地址
+      cd.appendChild(E('div',{style:'margin-top:12px'}));
+      cd.appendChild(E('div',{class:'cf-label'},'部署地址'));
+      var urlInp = E('input',{id:'cf-deploy-url-display',type:'text',class:'cf-input',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#f8fafc;color:#2563eb;font-weight:600;box-sizing:border-box',readonly:true});
+      cd.appendChild(urlInp);
+
+      // 部署 + 复制按钮
+      cd.appendChild(E('div',{style:'display:flex;gap:8px;margin:12px 0'}));
+      var db=E('button',{type:'button',id:'cf-deploy-btn',class:'cf-btn cf-btn-primary',style:'flex:1'},'立即部署');
+      db.onclick=deployNow;
+      cd.appendChild(db);
+      var cb=E('button',{type:'button',class:'cf-btn cf-btn-outline'},'复制地址');
+      cb.onclick=function(){var t=document.getElementById('cf-deploy-url-display');if(t&&t.value){navigator.clipboard.writeText(t.value).then(function(){ui.addNotification(null,E('p','已复制'));}).catch(function(){t.select();document.execCommand('copy');});}};
+      cd.appendChild(cb);
+      cd.appendChild(E('textarea',{id:'cf-deploy-result',class:'cbi-input-textarea',style:'width:100%;min-height:80px;margin-top:10px;font-size:11px;font-family:monospace;border-radius:12px;padding:10px 12px;box-sizing:border-box',readonly:true,placeholder:'部署结果'}));
+
+      c.appendChild(cd);
+      window.setTimeout(function(){computeDeployUrl();loadCfZones();}, 200);
+      return c;
+    }
+o.rmempty = true;
 
     o = s.taboption('basic', form.ListValue, 'schedule_mode', '执行计划');
     o.value('daily', '每天定时');
@@ -785,3 +918,51 @@ return view.extend({
     return m.render();
   }
 });
+
+function saveToken(kind) {
+  if (kind === 'github') {
+    var v = document.getElementById('cf-deploy-gh-token').value;
+    Promise.all([fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.github_token='+v]),fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.deploy_platform=github'])]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']);}).then(function(){ui.addNotification(null,E('p','GitHub Token \u5df2\u4fdd\u5b58'));}).catch(function(e){showSimpleModal('\u4fdd\u5b58\u5931\u8d25',String(e));});
+  } else {
+    var k=document.getElementById('cf-deploy-cf-key').value;var e=document.getElementById('cf-deploy-cf-email').value;
+    Promise.all([fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.cloudflare_global_api_key='+k]),fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.cloudflare_email='+e]),fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.deploy_platform=cloudflare'])]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']);}).then(function(){ui.addNotification(null,E('p','Cloudflare \u51ed\u636e\u5df2\u4fdd\u5b58'));}).catch(function(e){showSimpleModal('\u4fdd\u5b58\u5931\u8d25',String(e));});
+  }
+}
+function loadCfZones() {
+  var sel = document.getElementById('cf-deploy-cf-zone');
+  if (!sel) return;
+  // 从输入框或 UCI 读取凭据
+  var keyEl = document.getElementById('cf-deploy-cf-key');
+  var emailEl = document.getElementById('cf-deploy-cf-email');
+  var key = (keyEl && keyEl.value) ? keyEl.value : '';
+  var email = (emailEl && emailEl.value) ? emailEl.value : '';
+  if (!key || !email) {
+    // 回退从 UCI 读取
+    Promise.all([
+      fs.exec('/usr/bin/cf-ip-speed-uci', ['get', 'cf_ip_speed_client.main.cloudflare_global_api_key']).catch(function(){return{stdout:''};}),
+      fs.exec('/usr/bin/cf-ip-speed-uci', ['get', 'cf_ip_speed_client.main.cloudflare_email']).catch(function(){return{stdout:''};})
+    ]).then(function(rr){
+      key = (rr[0].stdout||'').trim();
+      email = (rr[1].stdout||'').trim();
+      if (key && email) doLoad(key, email);
+    });
+    return;
+  }
+  doLoad(key, email);
+  function doLoad(k, e) {
+    fs.exec('/usr/bin/cf-ip-speed-token-check',['zone',k,e]).then(function(result){
+      var stdout = (result && result.stdout) ? String(result.stdout) : '';
+      var zones = stdout.split(/[\r\n]+/).map(function(v){return v.trim();}).filter(function(v){return v.indexOf('.') > 0;});
+      sel.innerHTML = '';
+      if (!zones.length) { sel.innerHTML = '<option value="">没有找到域名</option>'; return; }
+      var opt0 = document.createElement('option'); opt0.value = ''; opt0.textContent = '请选择已有域名 (' + zones.length + '个)'; sel.appendChild(opt0);
+      zones.forEach(function(z){ var o = document.createElement('option'); o.value = z; o.textContent = z; sel.appendChild(o); });
+    }).catch(function(){ sel.innerHTML = '<option value="">读取失败</option>'; });
+  }
+}
+function togglePlatform(value) {
+  var gh = document.getElementById('cf-deploy-github-fields');
+  var cf = document.getElementById('cf-deploy-cf-fields');
+  if (gh) gh.style.display = value === 'github' ? '' : 'none';
+  if (cf) cf.style.display = value === 'cloudflare' ? '' : 'none';
+}
