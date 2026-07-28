@@ -24,7 +24,9 @@ Includes:
 - Live log panel
 - Stops common proxy services before testing, restores after finish
 
-## Docs
+## Notes
+
+- IPv4 has been validated on real devices. Because IPv6 return-path behavior varies across networks, side-router setups, and virtualized environments, IPv6 has not yet received equivalent real-device validation. Confirm IPv6 connectivity and HTTPS download capability before using it.
 
 - [How to self-host a speed test URL](docs/self-hosted-speed-url.md)
 

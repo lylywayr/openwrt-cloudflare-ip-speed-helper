@@ -246,7 +246,7 @@ dist/
 
 ## 注意
 
-- 当前安装脚本主测 `opkg` 环境
+- 当前版本已完成 IPv4 实机验证；由于不同网络、旁路由和虚拟化环境的 IPv6 回程表现存在差异，IPv6 尚未完成同等范围的实机验证，建议使用前先自行确认 IPv6 连通性与 HTTPS 下载能力
 - `cfst` 资源默认来自 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest)
 - 若 `测速地址` 留空，脚本会回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
 - 离线整包已内置 `cfst`，但如果系统极度精简，基础依赖仍建议优先用在线安装补齐
