@@ -1,0 +1,41 @@
+#!/bin/sh
+# Creates a private Cloudflare Worker speed endpoint. Never emits credentials.
+set -eu
+cfg(){ uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
+if [ "${1:-}" = status ]; then cat /tmp/cf-ip-speed-client/worker-create.log 2>/dev/null || true; exit 0; fi
+mkdir -p /tmp/cf-ip-speed-client
+log(){ echo "$*"; echo "$*" >> /tmp/cf-ip-speed-client/worker-create.log; }
+: > /tmp/cf-ip-speed-client/worker-create.log
+[ "$(cfg cf_speed_worker_consent)" = 1 ] || { log '错误：尚未授权创建测速 Worker'; exit 1; }
+key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email)
+[ -n "$key" ] && [ -n "$email" ] || { log '错误：请先保存 Cloudflare Global API Key 与账户邮箱'; exit 1; }
+api=https://api.cloudflare.com/client/v4
+cf(){ curl -fsS --connect-timeout 15 --max-time 90 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$@"; }
+log '1/4 正在读取 Cloudflare 账户…'
+aid=$(cf "$api/accounts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'|head -1); [ -n "$aid" ] || { log '错误：无法读取 Cloudflare 账户'; exit 1; }
+name=$(cfg cf_speed_worker_name); [ -n "$name" ] || name=cf-speed-test
+# Binary-safe streaming response; default 10 MiB, bounded at 100 MiB.
+cat >/tmp/cf-speed-worker.js <<'JS'
+export default { async fetch(request) { const u=new URL(request.url); if (u.pathname !== '/__down') return new Response('CF Speed Test endpoint: /__down?bytes=N',{status:404}); let n=Number(u.searchParams.get('bytes')||10485760); if(!Number.isFinite(n)||n<1)n=10485760;n=Math.min(Math.floor(n),104857600); const chunk=new Uint8Array(65536); crypto.getRandomValues(chunk); let left=n; return new Response(new ReadableStream({pull(c){if(left<=0){c.close();return;}let size=Math.min(left,chunk.length);c.enqueue(chunk.slice(0,size));left-=size;}}),{headers:{'content-type':'application/octet-stream','content-length':String(n),'cache-control':'no-store'}}); } };
+JS
+log '2/4 正在上传测速 Worker…'
+cf -X PUT "$api/accounts/$aid/workers/scripts/$name" -H 'Content-Type: application/javascript' --data-binary @/tmp/cf-speed-worker.js >/dev/null
+mode=$(cfg cf_speed_worker_domain_mode); zone=$(cfg cf_speed_worker_zone); sub=$(cfg cf_speed_worker_subdomain)
+if [ "$mode" = custom ] && [ -n "$zone" ] && [ -n "$sub" ]; then
+ log '3/4 正在绑定自定义域名路由…'
+ zid=$(cf "$api/zones?name=$zone"|sed -n 's/.*"id":"\([^"]*\)".*/\1/p'|head -1); [ -n "$zid" ] || { log '错误：找不到所选域名';exit 1; }
+ host="$sub.$zone"
+ log '3/4 正在创建 DNS 与绑定自定义域名路由…'
+ # A proxied placeholder DNS record is required before a Worker Route can match.
+ cf -X POST "$api/zones/$zid/dns_records" -H 'Content-Type: application/json' -d "{\"type\":\"A\",\"name\":\"$host\",\"content\":\"192.0.2.1\",\"proxied\":true,\"ttl\":1}" >/dev/null 2>&1 || true
+ cf -X POST "$api/zones/$zid/workers/routes" -H 'Content-Type: application/json' -d "{\"pattern\":\"$host/*\",\"script\":\"$name\"}" >/dev/null 2>&1 || true
+ url="https://$host/__down"
+else
+ log '3/4 正在读取 workers.dev 子域名…'
+ sd=$(cf "$api/accounts/$aid/workers/subdomain"|sed -n 's/.*"subdomain":"\([^"]*\)".*/\1/p'|head -1); [ -n "$sd" ] || { log '错误：该账户未启用 workers.dev，请选择自己的域名';exit 1; }
+ url="https://$name.$sd.workers.dev/__down"
+fi
+log '4/4 正在验证测速地址…'
+code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 45 "$url?bytes=1024" || true); [ "$code" = 200 ] || { log "错误：测速地址验证失败（HTTP $code）";exit 1; }
+uci set "cf_ip_speed_client.main.test_url=$url"; uci set "cf_ip_speed_client.main.cf_speed_worker_created=1"; uci commit cf_ip_speed_client
+log "完成：$url"

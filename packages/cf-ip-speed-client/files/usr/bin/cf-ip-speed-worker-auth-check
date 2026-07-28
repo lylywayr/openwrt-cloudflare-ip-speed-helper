@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+key="$(uci -q get cf_ip_speed_client.main.cloudflare_global_api_key 2>/dev/null || true)"
+email="$(uci -q get cf_ip_speed_client.main.cloudflare_email 2>/dev/null || true)"
+[ -n "$key" ] && [ -n "$email" ] || { echo '未保存 Cloudflare 凭据'; exit 1; }
+out="$(curl -fsS --connect-timeout 10 --max-time 20 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" https://api.cloudflare.com/client/v4/user 2>/dev/null)" || { echo 'Cloudflare 凭据不可用'; exit 1; }
+printf '%s' "$out" | grep -q '"success":true' && echo 'Cloudflare 凭据可用' || { echo 'Cloudflare 返回认证失败'; exit 1; }

@@ -10,6 +10,9 @@
         "/usr/bin/cf-ip-speed-deploy": [ "exec" ],
         "/usr/bin/cf-ip-speed-token-check": [ "exec" ],
         "/usr/bin/cf-ip-speed-pages-token-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-create-background": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-auth-check": [ "exec" ],
         "/usr/bin/cf-ip-speed-uci": [ "exec" ]
       },
       "ubus": {
@@ -24,6 +27,9 @@
         "/usr/bin/cf-ip-speed-deploy": [ "exec" ],
         "/usr/bin/cf-ip-speed-token-check": [ "exec" ],
         "/usr/bin/cf-ip-speed-pages-token-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-create-background": [ "exec" ],
+        "/usr/bin/cf-ip-speed-worker-auth-check": [ "exec" ],
         "/usr/bin/cf-ip-speed-uci": [ "exec" ]
       },
       "ubus": {

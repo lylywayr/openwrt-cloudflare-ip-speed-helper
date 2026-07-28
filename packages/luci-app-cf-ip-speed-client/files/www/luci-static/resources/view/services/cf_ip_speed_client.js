@@ -580,12 +580,21 @@ o.rmempty = false;
     	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
 o.rmempty = true;
 
+    o = s.taboption('basic', form.Value, 'test_url', '自定义测速地址');
+    o.placeholder = 'https://speed.example.com/__down';
+    o.description = '可手动填写测速下载地址；<a href="/luci-static/resources/cf-ip-speed-client/custom-speed-test-tutorial.html" target="_blank">如何创建自定义测速地址？</a>';
+    o.rmempty = true;
+
+    var speedWorker = s.taboption('basic', form.DummyValue, '_speed_worker', '自动创建测速地址');
+    speedWorker.rawhtml = true;
+    speedWorker.cfgvalue = function(sectionId) { return renderSpeedWorkerWidget(this.map, sectionId); };
+
     o = s.taboption('basic', form.Flag, 'edgetunnel_sync_enabled', '同步到 edgetunnel');
     o.default = '0';
     o.rmempty = false;
 
     o = s.taboption('basic', form.Value, 'edgetunnel_sync_url', 'edgetunnel 面板地址');
-    o.placeholder = 'https://your-edgetunnel.example.com';
+    o.placeholder = 'https://cfyx.lylywayr.asia';
     o.rmempty = true;
     o.depends('edgetunnel_sync_enabled', '1');
 
@@ -621,6 +630,8 @@ o.rmempty = true;
       var cfZone = uciGet(this.map, sectionId, 'cf_pages_zone') || '';
       var cfSubdomain = uciGet(this.map, sectionId, 'cf_pages_subdomain') || 'cfip';
       var cfPagesToken = uciGet(this.map, sectionId, 'cf_pages_api_token');
+      var cfPagesConsent = uciGet(this.map, sectionId, 'cf_pages_token_consent') === '1';
+      var ghDeployConsent = uciGet(this.map, sectionId, 'github_deploy_consent') === '1';
 
       var lastStatus = uciGet(this.map, sectionId, 'last_status') || 'idle';
 
@@ -660,6 +671,8 @@ o.rmempty = true;
       function deployNow() {
         var db = document.getElementById('cf-deploy-btn');
         if (!db || db.disabled) return;
+        var kind=document.getElementById('cf-deploy-kind'); var selected=kind?kind.value:'github';
+        if ((selected==='github'&&!ghDeployConsent)||(selected==='cloudflare'&&!cfPagesConsent)){ var msg='请先勾选当前部署平台的授权确认框。'; var el0=document.getElementById('cf-deploy-result');if(el0)el0.value=msg;updateStatusHint('error');return; }
         db.disabled = true; db.textContent = '部署中...'; updateStatusHint('deploying');
         fs.exec('/usr/bin/cf-ip-speed-deploy').then(function(r) {
           var out = textOf(r), el = document.getElementById('cf-deploy-result');
@@ -751,36 +764,16 @@ o.rmempty = true;
       cd.appendChild(E('div',{class:'cf-label'},'部署平台'));
       var ks=E('select',{id:'cf-deploy-kind',class:'cbi-input-select',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
       ks.innerHTML='<option value="github">GitHub</option><option value="cloudflare">Cloudflare Pages</option>';ks.value=platform;
-      ks.onchange=function(){
-        var isCf = this.value === 'cloudflare';
-        togglePlatform(this.value); sv('deploy_platform',this.value);
-        if (isCf) { var modal = document.getElementById('cf-pages-token-consent-modal'); if (modal) modal.style.display = 'flex'; }
-        window.setTimeout(configChanged,300);
-      };
+      ks.onchange=function(){ togglePlatform(this.value); sv('deploy_platform',this.value); window.setTimeout(computeDeployUrl,100); };
       cd.appendChild(ks);
-      var consentModal = E('div',{id:'cf-pages-token-consent-modal',style:'display:none;position:fixed;z-index:1000;inset:0;background:rgba(15,23,42,.48);align-items:center;justify-content:center;padding:20px'});
-      var consentCard = E('div',{style:'max-width:520px;width:100%;background:#fff;border-radius:16px;padding:20px;box-shadow:0 20px 50px rgba(15,23,42,.25)'});
-      consentCard.appendChild(E('h3',{style:'margin:0 0 10px;color:#1e293b'},'Cloudflare Pages 发布授权'));
-      consentCard.appendChild(E('p',{style:'font-size:13px;line-height:1.7;color:#475569'},'Pages 发布需要创建一个仅用于本路由器发布的 Cloudflare API Token。它仅授予当前 Cloudflare 账户的 Pages 写入权限，安全保存于本路由器，不会在页面、日志、部署结果或下载文件中显示。'));
-      var consentCheck = E('input',{type:'checkbox',id:'cf-pages-token-consent-check'});
-      var consentLabel = E('label',{style:'display:flex;gap:8px;align-items:flex-start;margin:14px 0;font-size:13px;color:#334155;cursor:pointer'});
-      consentLabel.appendChild(consentCheck); consentLabel.appendChild(E('span',{},'我已知晓并同意创建及保存仅用于 Cloudflare Pages 发布的 API Token。'));
-      consentCard.appendChild(consentLabel);
-      var consentActions=E('div',{style:'display:flex;justify-content:flex-end;gap:8px'});
-      var cancelConsent=E('button',{type:'button',class:'cf-btn cf-btn-outline'},'取消');
-      cancelConsent.onclick=function(){consentModal.style.display='none';ks.value='github';togglePlatform('github');sv('deploy_platform','github');};
-      var confirmConsent=E('button',{type:'button',class:'cf-btn cf-btn-primary',disabled:true},'同意授权');
-      consentCheck.onchange=function(){confirmConsent.disabled=!this.checked;};
-      confirmConsent.onclick=function(){confirmConsent.disabled=true;confirmConsent.textContent='保存中...';sv('cf_pages_token_consent','1').then(function(){showSimpleModal('已授权','已记录你的授权。系统将在首次需要发布、且没有可用 Token 时才创建 Pages 发布 Token；也可以在下方输入你自行创建的 Token。');consentModal.style.display='none';}).catch(function(e){showSimpleModal('保存失败','未能保存授权状态。');confirmConsent.disabled=false;confirmConsent.textContent='同意授权';});};
-      consentActions.appendChild(cancelConsent);consentActions.appendChild(confirmConsent);consentCard.appendChild(consentActions);consentModal.appendChild(consentCard);document.body.appendChild(consentModal);
-
       var gd=E('div',{id:'cf-deploy-github-fields'});if(platform!=='github')gd.style.display='none';
       gd.appendChild(inp('cf-deploy-gh-token','GitHub Token',githubToken,'password','Personal Access Token'));
       gd.appendChild(E('div', {style:'display:flex;gap:8px;margin:6px 0 14px'}, [
         E('button',{type:'button',class:'cf-btn cf-btn-primary',onclick:function(){saveToken('github');window.setTimeout(configChanged,500);}},'保存'),
         E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var v=document.getElementById('cf-deploy-gh-token');if(v&&v.value)fs.exec('/usr/bin/cf-ip-speed-token-check',['github',v.value]).then(function(r){showSimpleModal('检查结果',textOf(r));});}},'检查')
       ]));
-      gd.appendChild(inp('cf-deploy-gh-repo','仓库名称',repo,'text','owner/repository',function(){sv('deploy_repo',this.value);window.setTimeout(configChanged,300);}));
+      var ghAuth=E('label',{style:'display:flex;gap:12px;align-items:flex-start;margin:14px 0;padding:12px 14px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;font-size:13px;line-height:1.65;color:#475569;cursor:pointer'});var ghAuthCheck=E('input',{type:'checkbox',checked:ghDeployConsent,class:'cbi-input-checkbox',style:'width:22px;height:22px;min-width:22px;margin:0;accent-color:#667eea;cursor:pointer'});ghAuthCheck.onchange=function(){ghDeployConsent=this.checked;sv('github_deploy_consent',this.checked?'1':'0');};ghAuth.appendChild(ghAuthCheck);ghAuth.appendChild(E('span',{},'我同意本路由器使用上述 GitHub Token 向所填仓库写入优选结果文件。未勾选时禁止 GitHub 部署。'));gd.appendChild(ghAuth);
+      gd.appendChild(inp('cf-deploy-gh-repo','仓库名称',repo,'text','owner/repository',function(){sv('deploy_repo',this.value);window.setTimeout(computeDeployUrl,100);}));
       gd.appendChild(inp('cf-deploy-gh-branch','分支',ghBranch,'text','main',function(){sv('deploy_branch',this.value);window.setTimeout(computeDeployUrl,100);}));
       cd.appendChild(gd);
 
@@ -794,6 +787,8 @@ o.rmempty = true;
       cfd.appendChild(inp('cf-deploy-pages-token','Pages 发布 API Token（可选）',cfPagesToken,'password','可自行创建并粘贴；留空则按授权在首次发布时创建'));
       cfd.appendChild(E('div',{style:'font-size:12px;line-height:1.55;color:#64748b;margin:-4px 0 12px'},cfPagesToken ? '已保存 Pages 发布 Token（为安全起见不会显示内容）。' : '未保存 Pages 发布 Token：勾选授权后，系统仅在首次实际发布时自动创建。'));
       cfd.appendChild(E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var v=document.getElementById('cf-deploy-pages-token');if(v&&v.value){sv('cf_pages_api_token',v.value).then(function(){ui.addNotification(null,E('p','Pages 发布 Token 已安全保存，不会显示。'));});}}},'保存自定义 Pages Token'));
+
+      var cfAuth=E('label',{style:'display:flex;gap:12px;align-items:flex-start;margin:14px 0;padding:12px 14px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;font-size:13px;line-height:1.65;color:#475569;cursor:pointer'});var cfAuthCheck=E('input',{type:'checkbox',checked:cfPagesConsent,class:'cbi-input-checkbox',style:'width:22px;height:22px;min-width:22px;margin:0;accent-color:#667eea;cursor:pointer'});cfAuthCheck.onchange=function(){cfPagesConsent=this.checked;sv('cf_pages_token_consent',this.checked?'1':'0');};cfAuth.appendChild(cfAuthCheck);cfAuth.appendChild(E('span',{},'我同意本路由器使用 Cloudflare 凭据或 Pages Token 创建/更新 Pages 发布内容。未勾选时禁止 Cloudflare Pages 部署；首次实际发布才会按需创建 Token。'));cfd.appendChild(cfAuth);
 
       var pp=E('input',{id:'cf-deploy-cf-project',type:'text',value:cfProject,placeholder:'cloudflare-ip-speed-results',class:'cf-input',style:'flex:1;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
       pp.onchange=function(){sv('cf_pages_project',this.value);window.setTimeout(configChanged,300);};
@@ -994,6 +989,29 @@ o.rmempty = true;
     });
   }
 });
+
+function renderSpeedWorkerWidget(map, sectionId) {
+  var consent = uciGet(map, sectionId, 'cf_speed_worker_consent') === '1';
+  var mode = uciGet(map, sectionId, 'cf_speed_worker_domain_mode') || 'workers';
+  var zone = uciGet(map, sectionId, 'cf_speed_worker_zone') || '';
+  var sub = uciGet(map, sectionId, 'cf_speed_worker_subdomain') || 'speed';
+  var name = uciGet(map, sectionId, 'cf_speed_worker_name') || 'cf-speed-test';
+  function sv(k,v) { return fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.'+k+'='+v]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']);}); }
+  function input(label,id,value,placeholder) { var w=E('div',{style:'margin:9px 0'});w.appendChild(E('div',{class:'cf-label'},label));var x=E('input',{id:id,type:'text',value:value,placeholder:placeholder||'',class:'cf-input'});w.appendChild(x);return {w:w,x:x}; }
+  var box=E('div',{style:'margin:8px 0 16px;padding:14px;border:1px solid #dbe3f0;border-radius:14px;background:#fbfcff'});
+  box.appendChild(E('div',{style:'font-size:12px;color:#64748b;line-height:1.6;margin-bottom:10px'},'自动创建一个仅用于测速的 Cloudflare Worker。域名为可选：留空即可使用 workers.dev。'));
+  var auth=E('label',{style:'display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:12px;line-height:1.6;cursor:pointer'});
+  var ac=E('input',{type:'checkbox',checked:consent,class:'cbi-input-checkbox',style:'width:21px;height:21px;min-width:21px;margin:0;accent-color:#667eea'});
+  ac.onchange=function(){ if(!this.checked){sv('cf_speed_worker_consent','0');return;} fs.exec('/usr/bin/cf-ip-speed-worker-auth-check',[]).then(function(r){var t=textOf(r);if(/可用|success|有效|ok/i.test(t)){sv('cf_speed_worker_consent','1');}else{this.checked=false;showSimpleModal('无法授权','Cloudflare 凭据无效或尚未保存。请先在“结果部署 → Cloudflare Pages”保存账户邮箱和 Global API Key，再勾选。');}}.bind(this)).catch(function(){this.checked=false;showSimpleModal('无法授权','请先保存并检查 Cloudflare 凭据。');}.bind(this)); };
+  auth.appendChild(ac);auth.appendChild(E('span',{},'我同意本路由器使用已保存的 Cloudflare 凭据创建或更新测速 Worker。未授权时不能创建。'));box.appendChild(auth);
+  var ms=E('select',{class:'cf-select',style:'margin-top:10px'});ms.innerHTML='<option value="workers">使用自动 workers.dev 地址（无需填写域名）</option><option value="custom">使用自己的 Cloudflare 域名</option>';ms.value=mode;box.appendChild(ms);
+  var zw=E('div',{});var zi=input('已有顶级域名','cf-speed-worker-zone',zone,'example.com');var si=input('二级域名前缀','cf-speed-worker-subdomain',sub,'speed');zw.appendChild(zi.w);zw.appendChild(si.w);if(mode!=='custom')zw.style.display='none';box.appendChild(zw);
+  var ni=input('Worker 名称', 'cf-speed-worker-name', name, 'cf-speed-test');box.appendChild(ni.w);
+  ms.onchange=function(){zw.style.display=this.value==='custom'?'':'none';sv('cf_speed_worker_domain_mode',this.value);};zi.x.onchange=function(){sv('cf_speed_worker_zone',this.value);};si.x.onchange=function(){sv('cf_speed_worker_subdomain',this.value);};ni.x.onchange=function(){sv('cf_speed_worker_name',this.value);};
+  var progress=E('pre',{id:'cf-speed-worker-progress',style:'display:none;white-space:pre-wrap;margin:10px 0 0;padding:10px;border-radius:10px;background:#111827;color:#e5e7eb;font-size:11px;min-height:48px'});
+  var btn=E('button',{type:'button',class:'cf-btn cf-btn-primary',style:'margin-top:11px'},'自动创建测速地址');
+  btn.onclick=function(){if(!ac.checked){showSimpleModal('需要授权','请先勾选上方的 Worker 创建授权。');return;} if(ms.value==='custom'&&(!zi.x.value.trim()||!si.x.value.trim())){showSimpleModal('请完善域名','选择自定义域名时，需要填写顶级域名和二级域名前缀。');return;} btn.disabled=true;btn.textContent='创建中…';progress.style.display='';progress.textContent='正在启动…';Promise.all([sv('cf_speed_worker_domain_mode',ms.value),sv('cf_speed_worker_zone',zi.x.value.trim()),sv('cf_speed_worker_subdomain',si.x.value.trim()),sv('cf_speed_worker_name',ni.x.value.trim()||'cf-speed-test')]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-worker-create-background');}).then(function(){var n=0;var timer=window.setInterval(function(){fs.exec('/usr/bin/cf-ip-speed-worker-create',['status']).then(function(r){var out=textOf(r);progress.textContent=out||'正在连接 Cloudflare…';var m=out.match(/完成：(https?:\/\/[^\s]+)/);if(m||/错误：/.test(out)||n++>50){window.clearInterval(timer);btn.disabled=false;btn.textContent='自动创建测速地址';if(m){var field=document.querySelector('[id$="test_url"]');if(field){field.value=m[1];field.dispatchEvent(new Event('change',{bubbles:true}));}sv('test_url',m[1]);showSimpleModal('测速地址创建完成','已自动填写并保存：\n'+m[1]);}else if(/错误：/.test(out)){showSimpleModal('创建失败',out);}else{showSimpleModal('创建超时','请稍后查看测速地址和创建日志。');}}}).catch(function(){});},1000);});};box.appendChild(btn);box.appendChild(progress);return box;
+}
 
 function saveToken(kind) {
   if (kind === 'github') {
