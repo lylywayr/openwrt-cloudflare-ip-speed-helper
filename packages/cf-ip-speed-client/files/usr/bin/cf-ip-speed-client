@@ -778,7 +778,7 @@ format_edgetunnel_add_from_cache() {
 	awk -F',' -v limit="$v4_count" '
 	NF && count < limit {
 		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
-		speed=($9 == "" ? "0.00" : $9) + 0; latency=($10 == "" ? "999999" : $10) + 0;
+		speed=($8 == "" ? "0.00" : $8) + 0; latency=($9 == "" ? "999999" : $9) + 0;
 		if (speed <= 0 || latency <= 0) next;
 		printf "%s:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
 		count++;
@@ -787,7 +787,7 @@ format_edgetunnel_add_from_cache() {
 	awk -F',' -v limit="$v6_count" '
 	NF && count < limit {
 		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
-		speed=($9 == "" ? "0.00" : $9) + 0; latency=($10 == "" ? "999999" : $10) + 0;
+		speed=($8 == "" ? "0.00" : $8) + 0; latency=($9 == "" ? "999999" : $9) + 0;
 		if (speed <= 0 || latency <= 0) next;
 		printf "[%s]:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
 		count++;
@@ -813,6 +813,10 @@ sync_edgetunnel_add() {
 
 	case "$base_url" in
 		*/) base_url="${base_url%/}" ;;
+	esac
+	# Users may enter the panel URL ending in /admin; requests below use site root.
+	case "$base_url" in
+		*/admin) base_url="${base_url%/admin}" ;;
 	esac
 
 	cookie_file="${WORKDIR}/edgetunnel-cookie.txt"
