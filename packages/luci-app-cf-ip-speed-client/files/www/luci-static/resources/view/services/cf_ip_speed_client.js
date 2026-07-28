@@ -7,6 +7,7 @@
 var liveTimer = null;
 var liveSeenRunning = false;
 var liveAutoReloadDone = false;
+var liveFollowOutput = true;
 
 function translateStatus(status) {
   var map = {
@@ -53,24 +54,24 @@ function readTextResult(result) {
 }
 
 function compactLatencyProgress(segment) {
-  var match = segment.match(/(\d+)\s*\/\s*(\d+)\s*\[([^\]]+)\]\s*可用:\s*(\d+)/);
+  var match = segment.match(/(\d+)\s*\/\s*(\d+)\s*\[([^\]]+)\](?:\s*可用:\s*(\d+))?/);
   if (!match)
     return segment;
 
   var current = parseInt(match[1], 10) || 0;
   var total = parseInt(match[2], 10) || 0;
   var bar = match[3] || '';
-  var available = match[4] || '0';
+  var available = match[4] || '';
   var arrowMatch = bar.match(/[↗↘↙↖]/);
   var arrow = arrowMatch ? arrowMatch[0] : '';
   var percent = total > 0 ? Math.round((current / total) * 100) : 0;
 
-  return '延迟进度 ' + current + '/' + total + ' [' + percent + '%' + (arrow ? ' ' + arrow : '') + '] 可用: ' + available;
+  return (match[4] ? '延迟' : '测速') + '进度 ' + current + '/' + total + ' [' + percent + '%' + (arrow ? ' ' + arrow : '') + ']' + (match[4] ? ' 可用: ' + available : '');
 }
 
 function sanitizeLogText(text) {
   var raw = String(text || '').replace(/\r/g, '\n');
-  var progressPattern = /\d+\s*\/\s*\d+\s*\[[^\]]+\]\s*可用:\s*\d+/g;
+  var progressPattern = /\d+\s*\/\s*\d+\s*\[[^\]]+\](?:\s*可用:\s*\d+)?/g;
   var result = [];
 
   raw.split(/\n+/).forEach(function(line) {
@@ -312,8 +313,13 @@ function setLivePanel(status, message, logText) {
   setActionState(status, message);
 
   if (logNode && typeof logText === 'string') {
+    var wasNearBottom = (logNode.scrollHeight - logNode.scrollTop - logNode.clientHeight) < 36;
     logNode.textContent = sanitizeLogText(logText) || '暂无日志输出';
-    logNode.scrollTop = logNode.scrollHeight;
+    // Manual upward scrolling pauses follow mode. It resumes only through the ↓ button.
+    if (liveFollowOutput && wasNearBottom)
+      logNode.scrollTop = logNode.scrollHeight;
+    var followBtn = document.getElementById('cf-live-follow-btn');
+    if (followBtn) followBtn.style.display = liveFollowOutput ? 'none' : '';
   }
 }
 
@@ -952,27 +958,35 @@ o.rmempty = true;
         }, '状态：' + initialState.text + ' | ' + initialState.detail),
         E('pre', {
           id: 'cf-live-log',
-          style: 'white-space:pre;overflow:auto;margin:0;padding:8px 9px;border-radius:10px;background:#111827;color:#e5e7eb;font-size:11px;line-height:1.32;letter-spacing:-0.1px;height:72vh;min-height:520px;max-height:820px;font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace'
-        }, '正在加载...')
+          style: 'white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;overflow-x:hidden;margin:0;padding:8px 9px;border-radius:10px;background:#111827;color:#e5e7eb;font-size:10px;line-height:1.42;height:52vh;min-height:360px;max-height:560px;font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,monospace',
+          scroll: function(ev) {
+            var el = ev.currentTarget;
+            if ((el.scrollHeight - el.scrollTop - el.clientHeight) > 40) {
+              liveFollowOutput = false;
+              var b = document.getElementById('cf-live-follow-btn'); if (b) b.style.display = '';
+            }
+          }
+        }, '正在加载...'),
+        E('button', {
+          id: 'cf-live-follow-btn', type: 'button', class: 'cf-btn cf-btn-primary',
+          style: 'display:none;position:sticky;bottom:12px;float:right;margin:-48px 14px 14px 0;z-index:3;padding:9px 14px;font-size:13px',
+          click: function() { var el=document.getElementById('cf-live-log'); liveFollowOutput=true; if(el)el.scrollTop=el.scrollHeight; this.style.display='none'; }
+        }, '↓ 跳到最新'),
+        E('div', {style:'display:flex;gap:10px;margin-top:12px'}, [
+          E('button', {type:'button',class:'cf-btn cf-btn-primary',click:function(){return updateLiveArea();}}, '刷新日志'),
+          E('button', {type:'button',class:'cf-btn',style:'background:#ef4444;color:#fff',click:function(){return fs.exec('/usr/bin/cf-ip-speed-client',['clear-log']).then(function(r){startLiveTimer();showSimpleModal('日志已清空',textOf(r),true);}).catch(function(e){showSimpleModal('清空失败',String(e&&e.message?e.message:e),false);});}}, '清空日志')
+        ])
       ]);
     };
 
-    var refreshLog = s.taboption('log', form.Button, '_refresh_log', '刷新日志');
-    refreshLog.inputstyle = 'action';
-    refreshLog.onclick = function() {
-      return updateLiveArea();
-    };
+    // Actions live inside the log card so they do not leave an empty LuCI form row.
+    var refreshLog = s.taboption('log', form.DummyValue, '_refresh_log', '');
+    refreshLog.rawhtml = true;
+    refreshLog.cfgvalue = function() { return E('span', {style:'display:none'}); };
 
-    var clearLog = s.taboption('log', form.Button, '_clear_log', '清空日志');
-    clearLog.inputstyle = 'remove';
-    clearLog.onclick = function() {
-      return fs.exec('/usr/bin/cf-ip-speed-client', ['clear-log']).then(function(result) {
-        startLiveTimer();
-        showSimpleModal('日志已清空', textOf(result), true);
-      }).catch(function(error) {
-        showSimpleModal('清空失败', String(error && error.message ? error.message : error), false);
-      });
-    };
+    var clearLog = s.taboption('log', form.DummyValue, '_clear_log', '');
+    clearLog.rawhtml = true;
+    clearLog.cfgvalue = function() { return E('span', {style:'display:none'}); };
 
     return m.render().then(function(node) {
       // Persist every normal form input/select immediately. Deployment widgets

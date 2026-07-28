@@ -26,7 +26,7 @@ DISPLAY_TOP_N=5
 SPEED_TEST_REPEAT=3
 MEASURE_THREADS=6
 CACHE_FILL_TOP_N=100
-SPEED_CACHE_THRESHOLD_MB="4.00"
+SPEED_CACHE_THRESHOLD_MB="0.00"
 CACHE_LIMIT=100
 FAIL_LIMIT=10
 
@@ -777,19 +777,21 @@ format_edgetunnel_add_from_cache() {
 
 	awk -F',' -v limit="$v4_count" '
 	NF && count < limit {
-		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
+		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3); country=($4 == "" ? "" : $4);
 		speed=($8 == "" ? "0.00" : $8) + 0; latency=($9 == "" ? "999999" : $9) + 0;
 		if (speed <= 0 || latency <= 0) next;
-		printf "%s:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
+		label=colo (country=="" ? "" : "/" country);
+		printf "%s:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, label, latency, speed * 8;
 		count++;
 	}' "$CACHE_V4_FILE" >> "$tmp_file"
 
 	awk -F',' -v limit="$v6_count" '
 	NF && count < limit {
-		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3);
+		ip=$1; port=($2 == "" ? "443" : $2); colo=($3 == "" ? "CF" : $3); country=($4 == "" ? "" : $4);
 		speed=($8 == "" ? "0.00" : $8) + 0; latency=($9 == "" ? "999999" : $9) + 0;
 		if (speed <= 0 || latency <= 0) next;
-		printf "[%s]:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, colo, latency, speed * 8;
+		label=colo (country=="" ? "" : "/" country);
+		printf "[%s]:%s#%s LocalBest[%.0fms %.2fMbps]\n", ip, port, label, latency, speed * 8;
 		count++;
 	}' "$CACHE_V6_FILE" >> "$tmp_file"
 
@@ -1157,91 +1159,57 @@ build_priority_ip_file() {
 }
 
 run_cfst_for_version() {
-	ip_version="$1"
-	result_file="$2"
-	test_ports="$3"
-	label="$(version_label "$ip_version")"
-	source_ip_file="$(ip_file_for_version "$ip_version")"
-	cache_file="$(cache_file_for_version "$ip_version")"
-	manual_file="$(manual_file_for_version "$ip_version")"
-	test_url="$(cfg test_url "$DEFAULT_TEST_URL")"
-	manual_ports="$(resolve_manual_ports "$manual_file")"
-	effective_test_ports="$(merge_port_lists "$test_ports" "$manual_ports")"
-	run_source_file="$(build_run_source_file "$ip_version" "$source_ip_file" "$manual_file")"
-
-	if [ ! -f "$source_ip_file" ]; then
-		set_status "error" "missing ${label} ip file: $source_ip_file"
-		rm -f "$run_source_file"
-		return 1
-	fi
-
-	[ -n "$effective_test_ports" ] || effective_test_ports="443"
-	log "starting ${label} cfst with $(wc -l < "$run_source_file" 2>/dev/null || echo 0) ranges, ports: $effective_test_ports"
-	echo "===== ${label} flow $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$CFST_LOG"
-	set_status "running" "${label} 正在优选：端口 ${effective_test_ports}"
-
-	# 多端口轮询：标准 cfst 只支持单端口，每个端口分别跑
-	all_merged="${result_file}.merged"
-	: > "$all_merged"
-	found_any=0
-
-	for cf_port in $effective_test_ports; do
-		port_log="${result_file}.port${cf_port}"
-		log "  ${label} testing port ${cf_port}..."
-		# 标准 cfst：延迟+下载测速
-		if cfst \
-			-n 60 -t 4 -dn "$MEASURE_TOP_N" -dt 10 \
-			-tp "$cf_port" \
-			-f "$run_source_file" \
-			-url "$test_url" \
-			-o "$port_log" \
-			-p 0 >> "$CFST_LOG" 2>&1; then
-			if [ -f "$port_log" ] && awk 'NR==2{found=1} END{exit found?0:1}' "$port_log" 2>/dev/null; then
-				found_any=1
-				# 格式转换：标准 cfst 7列 → 11列
-				exec 3< "$port_log"
-				read -r header <&3
-				while IFS=, read -r cf_ip cf_sent cf_recv cf_loss cf_latency cf_speed cf_colocode <&3; do
-					[ -n "$cf_ip" ] || continue
-					speed_ok=$(awk -v s="$cf_speed" -v t="$SPEED_CACHE_THRESHOLD_MB" 'BEGIN{print (s+0 >= t+0) ? 1 : 0}')
-					loss_ok=$(awk -v l="$cf_loss" 'BEGIN{print (l+0 == 0) ? 1 : 0}')
-					[ "$speed_ok" = "1" ] || continue
-					[ "$loss_ok" = "1" ] || continue
-					now_val="$(date '+%Y-%m-%d %H:%M:%S')"
-					cf_country="$(colo_country "$cf_colocode")"
-					printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s\n' \
-						"$cf_ip" "$cf_latency" "$cf_speed" "$cf_colocode" "$cf_port" "$cf_country" "$now_val" >> "$all_merged"
-				done
-				exec 3<&-
-			fi
-			rm -f "$port_log"
+	ip_version="$1"; result_file="$2"; test_ports="$3"; label="$(version_label "$ip_version")"
+	source_ip_file="$(ip_file_for_version "$ip_version")"; manual_file="$(manual_file_for_version "$ip_version")"; cache_file="$(cache_file_for_version "$ip_version")"
+	test_url="$(cfg test_url "$DEFAULT_TEST_URL")"; run_source_file="$(build_run_source_file "$ip_version" "$source_ip_file" "$manual_file")"
+	[ -f "$source_ip_file" ] || { set_status error "missing ${label} ip file"; return 1; }
+	[ -n "$test_ports" ] || test_ports=443
+	all_merged="${result_file}.merged"; : > "$all_merged"; found_any=0
+	for cf_port in $test_ports; do
+		latency_csv="${WORKDIR}/latency-${ip_version}-${cf_port}.csv"; selected_csv="${WORKDIR}/selected-${ip_version}-${cf_port}.csv"; jobs_dir="${WORKDIR}/jobs-${ip_version}-${cf_port}"
+		rm -rf "$jobs_dir"; mkdir -p "$jobs_dir"
+		log "${label} 端口 ${cf_port}：仅 HKG/LAX/SJC，丢包 0、每机房延迟前 10"
+		set_status running "${label} 端口 ${cf_port} 正在延迟初筛（HKG/LAX/SJC）"
+		# HTTPing lets cfst filter by the actual serving Colo during the latency pass.
+		if ! cfst -n 60 -t 4 -dn 0 -dd -httping -cfcolo HKG,LAX,SJC -tlr 0 -tp "$cf_port" -f "$run_source_file" -url "$test_url" -o "$latency_csv" -p 0 >> "$CFST_LOG" 2>&1; then log "${label} 端口 ${cf_port} 延迟初筛失败"; continue; fi
+		if [ ! -s "$latency_csv" ]; then
+			log "${label} 端口 ${cf_port} 延迟结果文件为空，跳过"
+			continue
 		fi
+		# Drop the CSV header before sorting. Then keep zero-loss candidates, grouped by colo,
+		# with the lowest ten latencies per group.
+		awk -F',' 'NR>1 && $4+0==0' "$latency_csv" | sort -t, -k7,7 -k5,5n | awk -F',' '{c=($7==""?"N/A":$7);if(++n[c]<=10)print}' > "$selected_csv"
+		total="$(wc -l < "$selected_csv" | tr -d ' ')"; [ "$total" -gt 0 ] 2>/dev/null || { log "${label} 端口 ${cf_port} 无丢包为 0 的候选"; continue; }
+		log "${label} 端口 ${cf_port}：已选 ${total} 个候选（每机房最多 10），单线程下载测速"
+		set_status running "${label} 端口 ${cf_port} 下载测速：${total} 个候选，单线程"
+		i=0; while IFS=',' read -r cip csent crecv closs clat cspeed ccolo; do
+			[ -n "$cip" ] || continue; i=$((i+1))
+			# Sequential measurement is deliberate: concurrent requests compete for the
+			# same WAN bandwidth and distort each candidate's measured download speed.
+			start_country="$(colo_country "$ccolo")"; [ -n "$start_country" ] || start_country="-"
+			log "测速开始 [$i/$total] $cip:$cf_port ${ccolo:-N/A}/${start_country}"
+			meta="$(measure_target_meta "$ip_version" "$cip" "$cf_port" || true)"; oldifs="$IFS"; IFS="$(printf '\t')"; read -r spd gotcolo country city <<EOF
+$meta
+EOF
+			IFS="$oldifs"; spd="${spd:-0.00}"
+			[ -n "${gotcolo:-}" ] && [ "${gotcolo:-}" != "N/A" ] || gotcolo="$ccolo"
+			country="${country:-}"; [ -n "$country" ] || country="$(colo_country "$gotcolo")"
+			[ -n "$country" ] || country="-"
+			printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s\n' "$cip" "$clat" "$spd" "$gotcolo" "$cf_port" "$country" "$(date '+%Y-%m-%d %H:%M:%S')" > "$jobs_dir/$i.ok"
+			log "测速完成 [$i/$total] $cip:$cf_port ${gotcolo:-N/A}/${country} ${spd}MB/s"
+		done < "$selected_csv"
+		wait
+		cat "$jobs_dir"/*.ok 2>/dev/null >> "$all_merged" || true
+		[ -s "$all_merged" ] && found_any=1
 	done
-
-	if [ "$found_any" = "0" ]; then
-		log "${label} 所有端口优选均未产出有效结果"
-		rm -f "$all_merged" "$run_source_file"
-		set_status "error" "${label} 优选失败"
-		return 1
-	fi
-
-	# 按速度排序取前 MEASURE_TOP_N
-	sort -t, -k6 -rn "$all_merged" | head -n "$MEASURE_TOP_N" > "$result_file"
-	rm -f "$all_merged"
-
-	# 更新缓存（取前 CACHE_FILL_TOP_N 行）
-	: > "$cache_file"
-	# Cache schema: ip,port,colo,country,source,fail_count,last_loss,last_speed,last_latency,last_updated
-	awk -F',' -v limit="$CACHE_FILL_TOP_N" 'NR<=limit { printf "%s,%s,%s,%s,%s,0,0,%s,%s,%s\n",$1,$8,$7,$9,$4,$6,$5,$11 }' "$result_file" > "$cache_file"
-
-	save_result_state "$ip_version" "$result_file"
-	normalize_cache_file "$ip_version"
-	sync_manual_file_with_cache "$ip_version"
-
-	log "${label} completed: $result_file"
 	rm -f "$run_source_file"
-	return 0
+	if [ "$found_any" = 0 ]; then set_status error "${label} 优选未产出达标结果"; return 1; fi
+	sort -t, -k6 -rn "$all_merged" | head -n "$MEASURE_TOP_N" > "$result_file"; rm -f "$all_merged"
+	: > "$cache_file"
+	awk -F',' -v limit="$CACHE_FILL_TOP_N" 'NR<=limit { printf "%s,%s,%s,%s,%s,0,0,%s,%s,%s\n",$1,$8,$7,$9,$4,$6,$5,$11 }' "$result_file" > "$cache_file"
+	save_result_state "$ip_version" "$result_file"; normalize_cache_file "$ip_version"; sync_manual_file_with_cache "$ip_version"; log "${label} completed: $result_file"; return 0
 }
+
 run_once() {
 	require_command cfst
 	require_command awk
@@ -1269,6 +1237,16 @@ run_once() {
 		v6) test_versions="v6" ;;
 		*) test_versions="v4 v6" ;;
 	esac
+	# Do not run cfst IPv6 when the router has no IPv6 default route. Without this
+	# it can finish with no CSV and incorrectly turn an otherwise valid IPv4 run into error.
+	if printf '%s' "$test_versions" | grep -qw v6 && ! has_ipv6_route; then
+		log "IPv6 skipped: no default IPv6 route"
+		test_versions="$(printf '%s' "$test_versions" | sed 's/v6//;s/  */ /g;s/^ //;s/ $//')"
+		if [ "$ip_mode" = "v6" ]; then
+			set_status error "IPv6 无默认路由，已跳过优选"
+			return 1
+		fi
+	fi
 
 	mkdir -p "$WORKDIR"
 	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -1429,24 +1407,23 @@ probe_target() {
 }
 
 show_logs() {
-	# LuCI RPC has a bounded response size. Returning the entire cfst progress log
-	# eventually causes polling to fail, so expose a compact, newest-first window.
+	# Live task lines are shown LAST so the browser stays on the useful newest
+	# download telemetry instead of jumping down into cfst's obsolete progress bar.
 	echo "===== 状态 ====="
 	echo "状态: $(cfg last_status idle)"
 	echo "说明: $(cfg last_message idle)"
 	echo "时间: $(cfg last_run_at never)"
 	echo
-	echo "===== 最近运行日志 ====="
-	[ -f "$LOG_FILE" ] && tail -n 80 "$LOG_FILE"
-	echo
-	echo "===== cfst 实时进度（最近片段） ====="
-	# cfst uses carriage-return progress updates; normalize them for the browser.
-	[ -f "$CFST_LOG" ] && tail -c 4096 "$CFST_LOG" | tr '\r' '\n'
+	echo "===== cfst 延迟进度（最近片段） ====="
+	[ -f "$CFST_LOG" ] && tail -c 1400 "$CFST_LOG" | tr '\r' '\n'
 	if [ -s "$BACKGROUND_LOG" ]; then
 		echo
 		echo "===== 后台输出 ====="
-		tail -n 80 "$BACKGROUND_LOG"
+		tail -n 30 "$BACKGROUND_LOG"
 	fi
+	echo
+	echo "===== 实时测速明细（最新在底部） ====="
+	[ -f "$LOG_FILE" ] && tail -n 80 "$LOG_FILE"
 }
 
 show_status() {
@@ -1486,7 +1463,11 @@ install_cron() {
 	esac
 
 	/etc/init.d/cron reload >/dev/null 2>&1 || true
-	set_status "ok" "cron updated"
+	# Saving form settings calls this helper during an active run. Do not overwrite
+	# the live "running" state with a harmless scheduler-update acknowledgement.
+	if [ "$(cfg last_status idle)" != "running" ]; then
+		set_status "ok" "cron updated"
+	fi
 }
 
 case "${1:-run}" in
