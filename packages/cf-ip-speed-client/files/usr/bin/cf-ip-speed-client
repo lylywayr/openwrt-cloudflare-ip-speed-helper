@@ -784,7 +784,6 @@ sync_edgetunnel_add() {
 	[ "$enabled" = "1" ] || return 0
 
 	base_url="$(cfg edgetunnel_sync_url)"
-	password="$(cfg edgetunnel_sync_password)"
 	[ -n "$base_url" ] || {
 		log "edgetunnel sync skipped: missing URL"
 		return 0

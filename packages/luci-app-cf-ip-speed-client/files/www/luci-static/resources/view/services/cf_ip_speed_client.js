@@ -589,7 +589,7 @@ o.rmempty = true;
     o.rmempty = false;
 
     o = s.taboption('basic', form.Value, 'edgetunnel_sync_url', 'edgetunnel 面板地址');
-    o.placeholder = 'https://cfyx.lylywayr.asia';
+    o.placeholder = 'https://cfyx.example.com';
     o.rmempty = true;
     o.depends('edgetunnel_sync_enabled', '1');
 
