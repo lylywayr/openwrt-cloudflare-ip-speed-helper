@@ -1,34 +1,23 @@
 # Changelog
 
-## v0.2.3
+## v0.2.3-beta (2026-07-28)
 
-- Add optional edgetunnel ADD.txt sync after each successful speed test run.
-- Sync replaces the remote ADD.txt with the latest local cache result, so stale IPs are removed.
-- Add LuCI and UCI options for edgetunnel URL, password, IPv4 count, and IPv6 count.
-- Keep edgetunnel sync disabled by default and do not store any panel password in the repository.
+### 修复
+- cfst 标准版参数兼容：替换魔改版 `-custom-flow` 为标准 cfst v2.3.5 参数
+- 多端口轮询：支持同时测多个端口（443, 8443, 2053, 2083）
+- IPv6 检测：无默认路由时自动跳过，避免卡死
+- BusyBox awk 兼容：修复 `printf "%d"` 语法错误
 
-## v0.2.2
+### 新增
+- 格式转换：标准 cfst 输出 7 列自动转换为自定义 11 列格式
+- 自动部署：优选完成后自动调用 `cf-ip-speed-deploy` 发布结果
+- 前端即时保存：所有配置项（IP 模式、端口、测速地址等）修改后立即持久化
+- 智能部署区域：
+  - 部署地址根据配置实时计算并展示
+  - 配置变更后自动触发部署
+  - 无优选结果时提示引导用户执行优选
+- 速度阈值从 12.50 调整为 4.00 MB/s，更适配现有测速环境
 
-- 新增离线整包安装产物，内置 `cfst`
-- 安装脚本新增离线整包识别逻辑，可优先使用本地文件安装
-- README / README.en 新增“如何选择安装方式”与架构选择说明
-- 离线安装不再要求用户单独手装 `cfst`
-
-## v0.2.1
-
-- 默认配置不再内置私人测速地址，`test_url` 默认为空
-- 当 `test_url` 留空时，自动回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
-- 新增详细文档：`docs/self-hosted-speed-url.md`
-- 修复优选完成后代理未恢复的问题
-- 代理恢复逻辑增强：`start` 失败后自动补 `restart`
-- README / README.en 重新整理为干净 UTF-8 文档
-
-## v0.2.0
-
-- 首个公开发布版本
-- 包含 `cf-ip-speed-client`
-- 包含 `luci-app-cf-ip-speed-client` LuCI 面板
-- 支持 `IPv4` / `IPv6` / 双栈优选
-- 支持多端口优选、缓存管理、手动补种、实时日志
-- 支持停止代理后执行优选
-- 提供一键安装脚本与通用 `all` 架构 `.ipk` 打包脚本
+### 优化
+- 前端毛玻璃风格 UI 细节完善
+- 清除无效 manual 数据（tes,443）
