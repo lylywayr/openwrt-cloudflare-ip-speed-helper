@@ -1,0 +1,21 @@
+#!/bin/sh
+# UCI 包装脚本：前端通过 fs.exec 调用此脚本来读写 UCI
+# 避免直接调用 /sbin/uci 的权限问题
+action="${1:-}"
+shift 2>/dev/null || true
+case "$action" in
+  get)
+    uci -q get "$1" 2>/dev/null || true
+    ;;
+  set)
+    uci set "$1" 2>/dev/null || true
+    uci commit "${1%%.*}" 2>/dev/null || true
+    ;;
+  commit)
+    uci commit "$1" 2>/dev/null || true
+    ;;
+  *)
+    echo "usage: $0 {get|set|commit} args"
+    exit 1
+    ;;
+esac

@@ -1,27 +1,63 @@
+## 0.2.4-beta.4
+
+- 优选限定 HKG、LAX、SJC 三个机房；每个端口独立保留丢包率为 0、延迟最低的前 10 个候选。
+- 下载测速改为单线程逐 IP 进行，取消速度阈值，避免并发争抢带宽导致测速失真。
+- 实时日志新增 IP/端口、机房/国家与速度明细；优化移动端自动换行、日志跟随与操作按钮布局。
+- EdgeTunnel 同步结果注释增加机房/国家、延迟和下载速度。
+- 修复 IPv6 无默认路由时影响 IPv4 任务、Pages 自定义域名自动绑定与 DNS 校验。
+
+## 0.2.4-beta.3
+
+- Worker 自动测速地址创建增加预检查：检测 Worker 名称、二级域名 DNS 记录和 Worker 路由占用，避免覆盖已有项目或服务。
+- 域名下拉框异步加载后保留已选择值，并将测速 Worker 自定义域名改为自动读取的下拉选择。
+- 修复授权保存竞态、Worker 上传格式与运行时兼容性、创建日志重复及更明确的 DNS 诊断。
+
+## 0.2.4-beta.2
+
+- 恢复“自定义测速地址”输入框，支持自动保存手动填写的下载地址。
+- 新增可选域名的 Cloudflare Worker 一键测速地址创建：默认使用 workers.dev，也可绑定自有 Cloudflare 域名。
+- 新增 Worker 创建授权校验、实时创建进度、完成后自动验证并回填测速 URL。
+- 新增“如何创建自定义测速地址”内置教程页面。
+
+## 0.2.4-beta.1
+
+- 实时日志改为限量轮询，避免 cfst 大日志导致 LuCI 页面停止更新。
+- EdgeTunnel 同步修复 `/admin` 地址处理及速度、延迟字段映射。
+- Pages 弹窗仅记录用户授权；首次实际发布时才按需创建 Token。
+- 支持用户自行输入并安全保存 Pages 发布 API Token。
+- 前端选择框和输入框改为自动持久化。
+
+## 0.2.4-beta
+
+- 多端口发布：生成汇总 `ADD.txt` 与每端口 `ADD-<port>.txt`。
+- GitHub 与 Cloudflare Pages 独立部署，均已做端到端发布校验。
+- Pages 使用 Wrangler 官方发布流程；需用户前端知情同意后创建最小权限 Pages Token，Token 不回显。
+- 移除发行默认配置中的私人仓库、项目名与域名。
+
 # Changelog
 
-## v0.2.2
+## v0.2.3-beta (2026-07-28)
 
-- 新增离线整包安装产物，内置 `cfst`
-- 安装脚本新增离线整包识别逻辑，可优先使用本地文件安装
-- README / README.en 新增“如何选择安装方式”与架构选择说明
-- 离线安装不再要求用户单独手装 `cfst`
+### 修复
+- cfst 标准版参数兼容：替换魔改版 `-custom-flow` 为标准 cfst v2.3.5 参数
+- 多端口轮询：支持同时测多个端口（443, 8443, 2053, 2083）
+- IPv6 检测：无默认路由时自动跳过
+- BusyBox awk 兼容：修复 `printf "%d"` 语法错误
 
-## v0.2.1
+### 新增
+- 格式转换：标准 cfst 输出 7 列自动转换为自定义 11 列格式
+- 自动部署：优选完成后自动调用 `cf-ip-speed-deploy` 发布结果
+- 前端即时保存：所有配置项修改后立即持久化
+- 智能部署区域：部署地址实时计算展示，配置变更自动触发部署
+- 速度阈值从 12.50 调整为 4.00 MB/s
 
-- 默认配置不再内置私人测速地址，`test_url` 默认为空
-- 当 `test_url` 留空时，自动回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
-- 新增详细文档：`docs/self-hosted-speed-url.md`
-- 修复优选完成后代理未恢复的问题
-- 代理恢复逻辑增强：`start` 失败后自动补 `restart`
-- README / README.en 重新整理为干净 UTF-8 文档
+### 安装
 
-## v0.2.0
+**在线安装（推荐）：**
+```bash
+curl -fsSL https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh | sh
+```
 
-- 首个公开发布版本
-- 包含 `cf-ip-speed-client`
-- 包含 `luci-app-cf-ip-speed-client` LuCI 面板
-- 支持 `IPv4` / `IPv6` / 双栈优选
-- 支持多端口优选、缓存管理、手动补种、实时日志
-- 支持停止代理后执行优选
-- 提供一键安装脚本与通用 `all` 架构 `.ipk` 打包脚本
+**离线安装：**
+1. 下载对应架构的离线包
+2. 解压后执行 `sh install.sh`

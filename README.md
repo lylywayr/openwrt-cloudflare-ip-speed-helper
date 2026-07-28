@@ -50,9 +50,9 @@
 - `方式 1：一键安装`
   最推荐。路由器能联网、想直接装最新版，用这个。
 - `方式 2：指定版本安装`
-  你要锁版本、回滚版本、复现旧版本行为，用这个。
+  需要锁版本、回滚版本、复现旧版本行为时，用这个。
 - `方式 3：离线整包安装`
-  路由器不方便直连 GitHub，或你想先把整包下载到电脑再手动上传，用这个。
+  路由器不方便直连 GitHub，或需要先把整包下载到电脑后再手动上传时，用这个。
 
 上面 3 种方式都会把 `cfst` 一起装好，不需要再额外单独安装 `cfst`。
 
@@ -90,13 +90,13 @@ curl -fsSL https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-spee
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.2 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.3 sh /tmp/cf-ip-speed-install.sh
 ```
 
 它和方式 1 的区别只有一件事：
 
 - 方式 1 永远取当前最新版
-- 方式 2 由你自己指定 tag / branch / commit
+- 方式 2 由使用者自行指定 tag / branch / commit
 
 ### 方式 3：离线整包安装
 
@@ -144,8 +144,8 @@ grep DISTRIB_ARCH /etc/openwrt_release
 
 ```sh
 cd /tmp
-tar -xzf cf-ip-speed-offline_x86_64_0.2.2.tar.gz
-cd cf-ip-speed-offline_x86_64_0.2.2
+tar -xzf cf-ip-speed-offline_x86_64_0.2.3.tar.gz
+cd cf-ip-speed-offline_x86_64_0.2.3
 sh ./install.sh
 ```
 
@@ -176,7 +176,7 @@ wget -qO- https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed
 
 ```sh
 wget -O /tmp/cf-ip-speed-install.sh https://raw.githubusercontent.com/lylywayr/openwrt-cloudflare-ip-speed-helper/main/install.sh
-REF=v0.2.2 sh /tmp/cf-ip-speed-install.sh
+REF=v0.2.3 sh /tmp/cf-ip-speed-install.sh
 ```
 
 ### 离线整包升级
@@ -231,13 +231,13 @@ dist/
 
 默认生成：
 
-- `cf-ip-speed-client_0.2.2_all.ipk`
-- `luci-app-cf-ip-speed-client_0.2.2_all.ipk`
+- `cf-ip-speed-client_0.2.3_all.ipk`
+- `luci-app-cf-ip-speed-client_0.2.3_all.ipk`
 - `install.sh`
-- `cf-ip-speed-offline_x86_64_0.2.2.tar.gz`
-- `cf-ip-speed-offline_arm64_0.2.2.tar.gz`
-- `cf-ip-speed-offline_armv7_0.2.2.tar.gz`
-- `cf-ip-speed-offline_mips_0.2.2.tar.gz`
+- `cf-ip-speed-offline_x86_64_0.2.3.tar.gz`
+- `cf-ip-speed-offline_arm64_0.2.3.tar.gz`
+- `cf-ip-speed-offline_armv7_0.2.3.tar.gz`
+- `cf-ip-speed-offline_mips_0.2.3.tar.gz`
 
 说明：
 
@@ -249,7 +249,7 @@ dist/
 - 当前安装脚本主测 `opkg` 环境
 - `cfst` 资源默认来自 [XIU2/CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest)
 - 若 `测速地址` 留空，脚本会回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
-- 离线整包已内置 `cfst`，但如果你的系统极度精简，基础依赖仍建议优先用在线安装补齐
+- 离线整包已内置 `cfst`，但如果系统极度精简，基础依赖仍建议优先用在线安装补齐
 - 这套逻辑默认会在优选时停止常见代理服务；请不要在关键业务时间段直接启动优选
 - 首次安装后建议先检查 `测速地址`、`IP 模式`、`端口`、`执行计划`
 

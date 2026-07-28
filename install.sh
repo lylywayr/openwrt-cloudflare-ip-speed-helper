@@ -125,7 +125,7 @@ install_deps() {
     info "检查依赖"
     opkg update || true
     missing=""
-    for pkg in curl ca-bundle ip-full jsonfilter openssl-util luci-base rpcd uhttpd; do
+    for pkg in curl ca-bundle ip-full jsonfilter openssl-util luci-base rpcd uhttpd node node-npm; do
       opkg list-installed "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
     done
     [ -z "$missing" ] || opkg install $missing
@@ -186,6 +186,11 @@ apply_defaults() {
   uci -q get cf_ip_speed_client.main.daily_hour >/dev/null || uci set cf_ip_speed_client.main.daily_hour='3'
   uci -q get cf_ip_speed_client.main.daily_minute >/dev/null || uci set cf_ip_speed_client.main.daily_minute='0'
   uci -q get cf_ip_speed_client.main.result_file >/dev/null || uci set cf_ip_speed_client.main.result_file='/tmp/cf-ip-speed-client/result.csv'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_enabled >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_enabled='0'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_url >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_url=''
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_password >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_password=''
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_v4_count >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_v4_count='20'
+  uci -q get cf_ip_speed_client.main.edgetunnel_sync_v6_count >/dev/null || uci set cf_ip_speed_client.main.edgetunnel_sync_v6_count='10'
   uci -q get cf_ip_speed_client.main.log_clear_interval >/dev/null || uci set cf_ip_speed_client.main.log_clear_interval='weekly'
   uci commit cf_ip_speed_client
 }
@@ -201,6 +206,10 @@ install_files() {
     /usr/share/luci/menu.d
 
   download_raw "packages/cf-ip-speed-client/files/usr/bin/cf-ip-speed-client" "${TMP_DIR}/cf-ip-speed-client"
+  download_raw "packages/cf-ip-speed-client/files/usr/bin/cf-ip-speed-deploy" "${TMP_DIR}/cf-ip-speed-deploy"
+  download_raw "packages/cf-ip-speed-client/files/usr/bin/cf-ip-speed-pages-token-create" "${TMP_DIR}/cf-ip-speed-pages-token-create"
+  download_raw "packages/cf-ip-speed-client/files/usr/bin/cf-ip-speed-token-check" "${TMP_DIR}/cf-ip-speed-token-check"
+  download_raw "packages/cf-ip-speed-client/files/usr/bin/cf-ip-speed-uci" "${TMP_DIR}/cf-ip-speed-uci"
   download_raw "packages/cf-ip-speed-client/files/etc/config/cf_ip_speed_client" "${TMP_DIR}/cf_ip_speed_client"
   download_raw "packages/cf-ip-speed-client/files/etc/init.d/cf-ip-speed-client" "${TMP_DIR}/initd-cf-ip-speed-client"
   download_raw "packages/cf-ip-speed-client/files/etc/cf-ip-speed-client/ip.txt" "${TMP_DIR}/ip.txt"
@@ -210,6 +219,10 @@ install_files() {
   download_raw "packages/luci-app-cf-ip-speed-client/files/usr/share/luci/menu.d/luci-app-cf-ip-speed-client.json" "${TMP_DIR}/menu.json"
 
   install -m 755 "${TMP_DIR}/cf-ip-speed-client" /usr/bin/cf-ip-speed-client
+  install -m 755 "${TMP_DIR}/cf-ip-speed-deploy" /usr/bin/cf-ip-speed-deploy
+  install -m 700 "${TMP_DIR}/cf-ip-speed-pages-token-create" /usr/bin/cf-ip-speed-pages-token-create
+  install -m 755 "${TMP_DIR}/cf-ip-speed-token-check" /usr/bin/cf-ip-speed-token-check
+  install -m 755 "${TMP_DIR}/cf-ip-speed-uci" /usr/bin/cf-ip-speed-uci
   install -m 755 "${TMP_DIR}/initd-cf-ip-speed-client" /etc/init.d/cf-ip-speed-client
   install -m 644 "${TMP_DIR}/cf_ip_speed_client.js" /www/luci-static/resources/view/services/cf_ip_speed_client.js
   install -m 644 "${TMP_DIR}/acl.json" /usr/share/rpcd/acl.d/luci-app-cf-ip-speed-client.json
@@ -218,6 +231,12 @@ install_files() {
   [ -f /etc/config/cf_ip_speed_client ] || install -m 644 "${TMP_DIR}/cf_ip_speed_client" /etc/config/cf_ip_speed_client
   install -m 644 "${TMP_DIR}/ip.txt" /etc/cf-ip-speed-client/ip.txt
   install -m 644 "${TMP_DIR}/ip-v6.txt" /etc/cf-ip-speed-client/ip-v6.txt
+  if ! has_cmd wrangler; then
+    info "安装 Cloudflare Pages 发布器 Wrangler"
+    npm config set fund false >/dev/null 2>&1 || true
+    npm config set audit false >/dev/null 2>&1 || true
+    npm install -g wrangler@4
+  fi
 }
 
 reload_services() {

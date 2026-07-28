@@ -2,20 +2,20 @@
 
 目标：
 
-- 不在仓库里内置你的私人测速域名
+- 不在仓库里内置私有测速域名
 - 其他设备安装后默认可留空
-- 你自己的设备可单独填写专用测速地址
-- 优选结果尽量贴近你的真实出口环境
+- 需要时可单独填写专用测速地址
+- 优选结果尽量贴近真实出口环境
 
 当前项目里，`测速地址` 是可选项：
 
-- 你手动填写：用你自己的测速地址
-- 你留空：自动回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
+- 手动填写：使用自定义测速地址
+- 留空：自动回退到官方 `https://speed.cloudflare.com/__down?bytes=10485760`
 
 这意味着：
 
-- 仓库不会写死你的私人地址
-- 你的私人域名不会跟着安装脚本散出去
+- 仓库不会写死私有测速地址
+- 私有测速域名不会跟着安装脚本一并分发
 
 ## 一、为什么要自建测速地址
 
@@ -30,7 +30,7 @@
 
 - 目标固定
 - 更容易长期复测
-- 更接近你自己的实际使用环境
+- 更接近实际使用环境
 - 可自由控制文件大小
 
 ## 二、这套优选是怎么用测速地址的
@@ -66,13 +66,13 @@ https://cfspeed.example.com/__down?bytes=10485760
 
 其中：
 
-- `cfspeed.example.com` 是你自己的测速子域名
+- `cfspeed.example.com` 是自定义测速子域名
 - `__down` 是测速路径
 - `10485760` 是 `10MB`
 
 ## 四、准备条件
 
-你需要：
+准备条件：
 
 - 一个 Cloudflare 账户
 - 一个已接入 Cloudflare 的域名
@@ -121,7 +121,7 @@ export default {
 访问：
 
 ```text
-https://你的域名/__down?bytes=10485760
+https://example.com/__down?bytes=10485760
 ```
 
 应直接下载一个约 `10MB` 的文件。
@@ -256,15 +256,15 @@ cfspeed-worker
 7. 删掉默认示例代码。
 8. 粘贴前面那段 Worker 代码。
 9. 点击 `Deploy`。
-10. 部署完成后，先访问系统给你的：
+10. 部署完成后，先访问系统自动分配的地址：
 
 ```text
-https://你的-worker-name.your-subdomain.workers.dev/__down?bytes=10485760
+https://worker-name.example-subdomain.workers.dev/__down?bytes=10485760
 ```
 
 11. 如果这里已经能下载一个二进制文件，说明 Worker 本身没问题。
 
-### 方案 B：给 Worker 绑定你自己的测速域名
+### 方案 B：给 Worker 绑定自定义测速域名
 
 1. 进入刚才那个 Worker。
 2. 打开 `Settings`。
@@ -294,7 +294,7 @@ wrangler deploy
 
 ## 十二、如何确认测速地址真的适合本项目
 
-你要确认的不只是“能打开”，而是“适合拿来做 Cloudflare IP 优选”。
+需要确认的不只是“能打开”，而是“适合拿来做 Cloudflare IP 优选”。
 
 至少检查下面几项：
 
@@ -334,7 +334,7 @@ HTTP/1.1 200 OK
 https://cfspeed.example.com/__down?bytes=10485760
 ```
 
-如果你本地带宽较高，也可以改成 `20MB`：
+如果本地带宽较高，也可以改成 `20MB`：
 
 ```text
 https://cfspeed.example.com/__down?bytes=20971520
@@ -350,7 +350,7 @@ https://cfspeed.example.com/__down?bytes=20971520
 - 地区限制
 - 二次反代链路
 
-否则测出来的不是 Cloudflare IP 本身，而是你自己附加链路的结果。
+否则测出来的不是 Cloudflare IP 本身，而是额外附加链路的结果。
 
 ## 十三、推荐文件大小
 
@@ -429,17 +429,17 @@ cfspeed.example.com
 /__down?bytes=10485760
 ```
 
-### 3. 留空回退官方，手动填你自己的
+### 3. 留空回退官方，按需手动填写
 
 这也是当前仓库现在的默认设计：
 
-- 仓库默认不写你的私人测速域名
-- 你自己的设备单独填
+- 仓库默认不写私有测速域名
+- 需要时单独填写
 - 没填就回退官方地址
 
 ## 十六、如果你不用 Cloudflare Worker，还有哪些替代方案
 
-如果你不想用 Worker，也可以自己搭一个下载端点，但要注意：这时测速目标就不再是“Cloudflare 边缘 Worker 域名”，而是“你自己那台源站 + Cloudflare 前置”。
+如果不想用 Worker，也可以自行搭一个下载端点，但要注意：这时测速目标就不再是“Cloudflare 边缘 Worker 域名”，而是“自有源站 + Cloudflare 前置”。
 
 常见替代方案：
 
@@ -465,7 +465,7 @@ https://cfspeed.example.com/speed/10m.bin
 
 缺点：
 
-- 需要你自己维护源站
+- 需要自行维护源站
 - 文件大小固定
 - 源站性能会影响测速
 
@@ -477,7 +477,7 @@ https://cfspeed.example.com/speed/10m.bin
 - S3 兼容存储
 - 其他对象存储
 
-再通过你的 Cloudflare 域名对外暴露。
+再通过接入 Cloudflare 的域名对外暴露。
 
 优点：
 
@@ -489,9 +489,9 @@ https://cfspeed.example.com/speed/10m.bin
 - 配置稍复杂
 - 某些对象存储本身也会带来额外波动
 
-### 3. 你自己已有的下载域名
+### 3. 已有下载域名
 
-如果你已经有一个长期稳定、确认走 Cloudflare、没有鉴权和跳转的大文件地址，也可直接拿来用。
+如果已经有长期稳定、确认走 Cloudflare、没有鉴权和跳转的大文件地址，也可直接使用。
 
 前提仍然是：
 
@@ -521,13 +521,13 @@ IP 模式：IPv4 + IPv6
 
 ## 十八、最短检查清单
 
-如果你想快速自检，只看这 8 条：
+如果需要快速自检，可直接看这 8 条：
 
 1. 域名已接入 Cloudflare。
 2. 测速子域名是橙云。
 3. Worker 已成功部署。
 4. 自定义域名已绑定到 Worker。
-5. `https://你的域名/__down?bytes=10485760` 能正常下载。
+5. `https://example.com/__down?bytes=10485760` 能正常下载。
 6. `curl -I` 返回 `200 OK`。
 7. 面板里填的就是这个完整 URL。
 8. 优选前先确认测速地址没有额外鉴权或跳转。

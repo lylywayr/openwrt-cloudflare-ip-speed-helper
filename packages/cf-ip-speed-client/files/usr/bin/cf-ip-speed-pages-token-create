@@ -1,0 +1,26 @@
+#!/bin/sh
+# Create a least-privilege Cloudflare Pages deployment token.
+# Never print the token: only success/failure messages are emitted.
+set -eu
+cfg() { uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
+[ "$(cfg cf_pages_token_consent)" = "1" ] || { echo '未获得创建 Pages 发布 Token 的授权'; exit 1; }
+existing="$(cfg cf_pages_api_token)"
+[ -z "$existing" ] || { echo 'Pages 发布 Token 已存在，已直接使用安全保存的 Token。'; exit 0; }
+key="$(cfg cloudflare_global_api_key)"; email="$(cfg cloudflare_email)"
+[ -n "$key" ] && [ -n "$email" ] || { echo '请先保存 Cloudflare Global API Key 和账户邮箱'; exit 1; }
+api=https://api.cloudflare.com/client/v4
+accounts=$(curl -fsS -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$api/accounts")
+aid=$(printf %s "$accounts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+[ -n "$aid" ] || { echo '无法读取 Cloudflare 账户'; exit 1; }
+# Pages Write: scope is limited to the selected account.
+payload="{\"name\":\"CF IP Speed Client Pages Deploy\",\"policies\":[{\"effect\":\"allow\",\"resources\":{\"com.cloudflare.api.account.$aid\":\"*\"},\"permission_groups\":[{\"id\":\"8d28297797f24fb8a0c332fe0866ec89\"}]}]}"
+response=$(curl -fsS -X POST -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" -H 'Content-Type: application/json' "$api/user/tokens" -d "$payload")
+token=$(printf %s "$response" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p' | head -1)
+[ -n "$token" ] || { echo '创建 Pages 发布 Token 失败，请检查 Global API Key 权限'; exit 1; }
+# Persist privately; token is intentionally never printed or logged.
+umask 077
+uci set "cf_ip_speed_client.main.cf_pages_api_token=$token"
+uci set "cf_ip_speed_client.main.cf_pages_account_id=$aid"
+uci set 'cf_ip_speed_client.main.cf_pages_token_created=1'
+uci commit cf_ip_speed_client
+echo 'Pages 发布 Token 已创建并安全保存；Token 不会显示。'

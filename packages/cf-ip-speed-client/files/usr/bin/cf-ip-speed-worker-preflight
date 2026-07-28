@@ -1,0 +1,28 @@
+#!/bin/sh
+# Preflight for CF speed Worker. Outputs compact, non-sensitive key=value lines.
+set -eu
+cfg(){ uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
+key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email)
+[ -n "$key" ] && [ -n "$email" ] || { echo 'ERROR=请先保存 Cloudflare 凭据'; exit 1; }
+api=https://api.cloudflare.com/client/v4
+cf(){ curl -fsS --connect-timeout 15 --max-time 45 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$@"; }
+mode=$(cfg cf_speed_worker_domain_mode); name=$(cfg cf_speed_worker_name); zone=$(cfg cf_speed_worker_zone); sub=$(cfg cf_speed_worker_subdomain)
+[ -n "$name" ] || name=cf-speed-test
+# Exact script lookup: 404 means available, 200 is an intentional no-overwrite conflict.
+status=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 30 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$(printf '%s' "$api/accounts/$(cfg cf_pages_account_id)/workers/scripts/$name")" || true)
+if [ "$status" = 200 ]; then echo "ERROR=Worker 名称 $name 已存在，请更换 Worker 名称以避免覆盖已有项目"; exit 1; fi
+[ "$status" = 404 ] || { echo 'ERROR=无法检查 Worker 名称是否已使用'; exit 1; }
+echo 'WORKER=可用'
+if [ "$mode" = custom ]; then
+ [ -n "$zone" ] && [ -n "$sub" ] || { echo 'ERROR=请选择顶级域名并填写二级域名前缀'; exit 1; }
+ host="$sub.$zone"; zid=$(cf "$api/zones?name=$zone" | jsonfilter -e '@.result[0].id' 2>/dev/null || true)
+ [ -n "$zid" ] || { echo 'ERROR=找不到所选 Cloudflare 域名'; exit 1; }
+ dns=$(cf "$api/zones/$zid/dns_records?name=$host" | jsonfilter -e '@.result[0].id' 2>/dev/null || true)
+ [ -z "$dns" ] || { echo "ERROR=二级域名 $host 已有 DNS 记录，请更换二级域名前缀，系统不会覆盖已有记录"; exit 1; }
+ route=$(cf "$api/zones/$zid/workers/routes" | jsonfilter -e '@.result[*].pattern' 2>/dev/null | grep -Fx "$host/*" || true)
+ [ -z "$route" ] || { echo "ERROR=二级域名 $host 已被 Worker 路由占用，请更换二级域名前缀"; exit 1; }
+ echo "DOMAIN=$host 可用"
+else
+ echo 'DOMAIN=使用 workers.dev 地址'
+fi
+echo 'OK=预检查通过，可以安全创建'
