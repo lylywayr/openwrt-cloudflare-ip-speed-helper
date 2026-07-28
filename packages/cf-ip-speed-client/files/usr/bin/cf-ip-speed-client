@@ -1429,20 +1429,23 @@ probe_target() {
 }
 
 show_logs() {
+	# LuCI RPC has a bounded response size. Returning the entire cfst progress log
+	# eventually causes polling to fail, so expose a compact, newest-first window.
 	echo "===== 状态 ====="
 	echo "状态: $(cfg last_status idle)"
 	echo "说明: $(cfg last_message idle)"
 	echo "时间: $(cfg last_run_at never)"
 	echo
-	echo "===== 运行日志 ====="
-	[ -f "$LOG_FILE" ] && cat "$LOG_FILE"
+	echo "===== 最近运行日志 ====="
+	[ -f "$LOG_FILE" ] && tail -n 80 "$LOG_FILE"
 	echo
-	echo "===== cfst 明细 ====="
-	[ -f "$CFST_LOG" ] && cat "$CFST_LOG"
+	echo "===== cfst 实时进度（最近片段） ====="
+	# cfst uses carriage-return progress updates; normalize them for the browser.
+	[ -f "$CFST_LOG" ] && tail -c 4096 "$CFST_LOG" | tr '\r' '\n'
 	if [ -s "$BACKGROUND_LOG" ]; then
 		echo
 		echo "===== 后台输出 ====="
-		cat "$BACKGROUND_LOG"
+		tail -n 80 "$BACKGROUND_LOG"
 	fi
 }
 
