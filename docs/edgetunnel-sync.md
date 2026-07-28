@@ -14,7 +14,7 @@
 
 ```sh
 uci set cf_ip_speed_client.main.edgetunnel_sync_enabled='1'
-uci set cf_ip_speed_client.main.edgetunnel_sync_url='https://cfyx.lylywayr.asia'
+uci set cf_ip_speed_client.main.edgetunnel_sync_url='https://your-edgetunnel.example.com'
 uci set cf_ip_speed_client.main.edgetunnel_sync_password='<edgetunnel 面板密码>'
 uci set cf_ip_speed_client.main.edgetunnel_sync_v4_count='20'
 uci set cf_ip_speed_client.main.edgetunnel_sync_v6_count='10'

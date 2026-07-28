@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+kind="${1:-}"
+token="${2:-}"
+email="${3:-}"
+[ -n "$token" ] || { echo '未填写令牌'; exit 1; }
+case "$kind" in
+  github)
+    out="$(curl -fsS --connect-timeout 10 --max-time 20 -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' https://api.github.com/user 2>/dev/null)" || { echo 'GitHub Token 不可用'; exit 1; }
+    login="$(printf '%s' "$out" | jsonfilter -e '@.login' 2>/dev/null || true)"
+    [ -n "$login" ] && echo "GitHub Token 可用：$login" || { echo 'GitHub 返回内容异常'; exit 1; }
+    ;;
+  cloudflare)
+    [ -n "$email" ] || { echo 'Cloudflare 邮箱未填写'; exit 1; }
+    out="$(curl -fsS --connect-timeout 10 --max-time 20 -H "X-Auth-Email: $email" -H "X-Auth-Key: $token" -H 'Content-Type: application/json' https://api.cloudflare.com/client/v4/user 2>/dev/null)" || { echo 'Cloudflare Global API Key 不可用'; exit 1; }
+    ok="$(printf '%s' "$out" | jsonfilter -e '@.success' 2>/dev/null || true)"
+    [ "$ok" = 'true' ] && echo 'Cloudflare Global API Key 可用' || { echo 'Cloudflare 返回认证失败'; exit 1; }
+    ;;
+    zone)
+      [ -n "$email" ] || { echo 'Cloudflare 邮箱未填写'; exit 1; }
+      out="$(curl -fsS --connect-timeout 10 --max-time 20 -H "X-Auth-Email: $email" -H "X-Auth-Key: $token" -H 'Content-Type: application/json' 'https://api.cloudflare.com/client/v4/zones?per_page=100&status=active' 2>/dev/null)" || { echo 'Cloudflare Zone 读取失败'; exit 1; }
+      printf '%s' "$out" | awk -v RS='},' '/"name":/{gsub(/.*"name":"/,"");gsub(/".*/,"");if(!/name_servers|Account|Website/)print}' | sed '/^$/d'
+      ;;
+  *) echo '未知检查类型'; exit 1;;
+esac

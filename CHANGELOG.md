@@ -1,3 +1,10 @@
+## 0.2.4-beta
+
+- 多端口发布：生成汇总 `ADD.txt` 与每端口 `ADD-<port>.txt`。
+- GitHub 与 Cloudflare Pages 独立部署，均已做端到端发布校验。
+- Pages 使用 Wrangler 官方发布流程；需用户前端知情同意后创建最小权限 Pages Token，Token 不回显。
+- 移除发行默认配置中的私人仓库、项目名与域名。
+
 # Changelog
 
 ## v0.2.3-beta (2026-07-28)

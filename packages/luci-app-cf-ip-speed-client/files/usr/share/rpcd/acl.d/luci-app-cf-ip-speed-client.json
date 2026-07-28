@@ -6,7 +6,11 @@
       "file": {
         "/etc/cf-ip-speed-client": [ "list" ],
         "/etc/cf-ip-speed-client/*": [ "read" ],
-        "/usr/bin/cf-ip-speed-client": [ "exec" ]
+        "/usr/bin/cf-ip-speed-client": [ "exec" ],
+        "/usr/bin/cf-ip-speed-deploy": [ "exec" ],
+        "/usr/bin/cf-ip-speed-token-check": [ "exec" ],
+        "/usr/bin/cf-ip-speed-pages-token-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-uci": [ "exec" ]
       },
       "ubus": {
         "file": [ "exec" ]
@@ -16,7 +20,11 @@
       "uci": [ "cf_ip_speed_client" ],
       "file": {
         "/etc/cf-ip-speed-client/*": [ "write" ],
-        "/usr/bin/cf-ip-speed-client": [ "exec" ]
+        "/usr/bin/cf-ip-speed-client": [ "exec" ],
+        "/usr/bin/cf-ip-speed-deploy": [ "exec" ],
+        "/usr/bin/cf-ip-speed-token-check": [ "exec" ],
+        "/usr/bin/cf-ip-speed-pages-token-create": [ "exec" ],
+        "/usr/bin/cf-ip-speed-uci": [ "exec" ]
       },
       "ubus": {
         "file": [ "exec" ]

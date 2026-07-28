@@ -104,8 +104,6 @@ function normalizeGeoValue(value) {
 }
 
 function displayCellValue(row, column) {
-  if (column.key === 'country')
-    return '';
   var value = row[column.key];
   return value || '-';
 }
@@ -134,7 +132,6 @@ var CACHE_COLUMNS = [
   { key: 'port', label: '端口', placeholder: '443', width: '72px' },
   { key: 'colo', label: '机房', placeholder: 'HKG', width: '72px' },
   { key: 'country', label: '国家', placeholder: 'CN', width: '72px' },
-  { key: 'city', label: '城市', placeholder: 'Zhengzhou', width: '110px' },
   { key: 'source', label: '来源', placeholder: 'manual', width: '82px' },
   { key: 'fail_count', label: '失败', placeholder: '0', width: '72px' },
   { key: 'last_speed', label: '速度', placeholder: '0.00', width: '86px' },
@@ -162,7 +159,6 @@ var RESULT_COLUMNS = [
   { key: 'loss', label: '丢包', width: '72px' },
   { key: 'colo', label: '机房', width: '72px' },
   { key: 'country', label: '国家', width: '72px' },
-  { key: 'city', label: '城市', width: '110px' },
   { key: 'updatedAt', label: '更新时间', width: '168px' }
 ];
 
@@ -194,12 +190,12 @@ function parseCacheText(raw) {
       port: parts[1] || '',
       colo: parts[2] || '',
       country: normalizeGeoValue(parts[3]),
-      source: parts[5] || '',
-      fail_count: parts[6] || '',
-      last_loss: parts.length >= 11 ? (parts[7] || '') : '',
-      last_speed: parts.length >= 11 ? (parts[8] || '') : (parts[7] || ''),
-      last_latency: parts.length >= 11 ? (parts[9] || '') : (parts[8] || ''),
-      last_updated: parts.length >= 11 ? (parts[10] || '') : (parts[9] || '')
+      source: parts[4] || '',
+      fail_count: parts[5] || '',
+      last_loss: parts[6] || '',
+      last_speed: parts[7] || '',
+      last_latency: parts[8] || '',
+      last_updated: parts[9] || '' 
     };
   });
 }
@@ -589,7 +585,7 @@ o.rmempty = true;
     o.rmempty = false;
 
     o = s.taboption('basic', form.Value, 'edgetunnel_sync_url', 'edgetunnel 面板地址');
-    o.placeholder = 'https://cfyx.example.com';
+    o.placeholder = 'https://your-edgetunnel.example.com';
     o.rmempty = true;
     o.depends('edgetunnel_sync_enabled', '1');
 
@@ -619,6 +615,7 @@ o.rmempty = true;
       var cfKey = uciGet(this.map, sectionId, 'cloudflare_global_api_key');
       var cfEmail = uciGet(this.map, sectionId, 'cloudflare_email');
       var repo = uciGet(this.map, sectionId, 'deploy_repo') || 'cloudflare-ip-speed-results';
+      var ghBranch = uciGet(this.map, sectionId, 'deploy_branch') || 'main';
       var cfProject = uciGet(this.map, sectionId, 'cf_pages_project') || 'cloudflare-ip-speed-results';
       var cfDomainMode = uciGet(this.map, sectionId, 'cf_pages_domain_mode') || 'pages';
       var cfZone = uciGet(this.map, sectionId, 'cf_pages_zone') || '';
@@ -641,19 +638,36 @@ o.rmempty = true;
           return fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']);
         }).catch(function() {});
       }
+      function renderDeployLinks(out) {
+        var box = document.getElementById('cf-deploy-links');
+        if (!box) return;
+        var urls = String(out || '').match(/https?:\/\/[^\s]+\/ADD(?:-[0-9]+)?\.txt/g) || [];
+        urls = urls.filter(function(v, i, a) { return a.indexOf(v) === i; });
+        if (!urls.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+        box.style.display = ''; box.innerHTML = '';
+        urls.forEach(function(url) {
+          var name = url.split('/').pop();
+          var row = E('div', {style:'display:flex;gap:6px;align-items:center;margin:6px 0'});
+          row.appendChild(E('span', {style:'width:105px;font-weight:600;font-size:12px;color:#334155'}, name === 'ADD.txt' ? '全部结果' : name));
+          row.appendChild(E('a', {href:url,target:'_blank',style:'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2563eb;font-size:12px'}, url));
+          var cp = E('button', {type:'button',class:'cf-btn cf-btn-outline',style:'height:30px;padding:0 9px'}, '复制');
+          cp.onclick = function() { navigator.clipboard.writeText(url).then(function(){ ui.addNotification(null,E('p','已复制 '+name)); }); };
+          row.appendChild(cp); box.appendChild(row);
+        });
+      }
       function deployNow() {
         var db = document.getElementById('cf-deploy-btn');
         if (!db || db.disabled) return;
-        db.disabled = true; db.textContent = '部署中...';
+        db.disabled = true; db.textContent = '部署中...'; updateStatusHint('deploying');
         fs.exec('/usr/bin/cf-ip-speed-deploy').then(function(r) {
-          var out = textOf(r);
-          var el = document.getElementById('cf-deploy-result');
+          var out = textOf(r), el = document.getElementById('cf-deploy-result');
           if (el) el.value = out;
           db.disabled = false; db.textContent = '立即部署';
-          updateStatusHint('deployed');
+          if (/https?:\/\/[^\s]+\/ADD(?:-[0-9]+)?\.txt/.test(out)) { renderDeployLinks(out); updateStatusHint('deployed'); }
+          else { updateStatusHint('error'); }
         }).catch(function(e) {
-          db.disabled = false; db.textContent = '立即部署';
-          updateStatusHint('error');
+          var el = document.getElementById('cf-deploy-result'); if (el) el.value = String(e);
+          db.disabled = false; db.textContent = '立即部署'; updateStatusHint('error');
         });
       }
       function updateStatusHint(state) {
@@ -672,18 +686,26 @@ o.rmempty = true;
         }
       }
       function computeDeployUrl() {
-        var mode = document.getElementById('cf-deploy-cf-domain') ? document.getElementById('cf-deploy-cf-domain').value : 'pages';
-        var proj = document.getElementById('cf-deploy-cf-project') ? document.getElementById('cf-deploy-cf-project').value : 'cloudflare-ip-speed-results';
-        var sub = document.getElementById('cf-deploy-cf-subdomain') ? document.getElementById('cf-deploy-cf-subdomain').value : 'cfip';
-        var zone = document.getElementById('cf-deploy-cf-zone') ? document.getElementById('cf-deploy-cf-zone').value : '';
+        var kind = document.getElementById('cf-deploy-kind') ? document.getElementById('cf-deploy-kind').value : 'github';
         var url = '';
-        if (mode === 'pages' || !zone) {
-          url = 'https://' + proj + '.pages.dev';
+        if (kind === 'github') {
+          var repoEl = document.getElementById('cf-deploy-gh-repo');
+          var repoName = repoEl ? repoEl.value.trim() : '';
+          var branchEl = document.getElementById('cf-deploy-gh-branch');
+          var branch = branchEl && branchEl.value.trim() ? branchEl.value.trim() : 'main';
+          url = repoName.indexOf('/') > 0 ? 'https://raw.githubusercontent.com/' + repoName + '/' + branch + '/ADD.txt' : '配置 owner/repository 后生成';
         } else {
-          url = 'https://' + sub + '.' + zone;
+          var mode = document.getElementById('cf-deploy-cf-domain') ? document.getElementById('cf-deploy-cf-domain').value : 'pages';
+          var proj = document.getElementById('cf-deploy-cf-project') ? document.getElementById('cf-deploy-cf-project').value : 'cloudflare-ip-speed-results';
+          var sub = document.getElementById('cf-deploy-cf-subdomain') ? document.getElementById('cf-deploy-cf-subdomain').value : 'cfip';
+          var zone = document.getElementById('cf-deploy-cf-zone') ? document.getElementById('cf-deploy-cf-zone').value : '';
+          url = (mode === 'pages' || !zone) ? 'https://' + proj + '.pages.dev/ADD.txt' : 'https://' + sub + '.' + zone + '/ADD.txt';
         }
         var el = document.getElementById('cf-deploy-url-display');
-        if (el) el.value = url;
+        if (el) {
+          el.textContent = url;
+          el.href = url;
+        }
         return url;
       }
       function configChanged() {
@@ -727,8 +749,28 @@ o.rmempty = true;
       cd.appendChild(E('div',{class:'cf-label'},'部署平台'));
       var ks=E('select',{id:'cf-deploy-kind',class:'cbi-input-select',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#fafbfc'});
       ks.innerHTML='<option value="github">GitHub</option><option value="cloudflare">Cloudflare Pages</option>';ks.value=platform;
-      ks.onchange=function(){togglePlatform(this.value);sv('deploy_platform',this.value);window.setTimeout(configChanged,300);};
+      ks.onchange=function(){
+        var isCf = this.value === 'cloudflare';
+        togglePlatform(this.value); sv('deploy_platform',this.value);
+        if (isCf) { var modal = document.getElementById('cf-pages-token-consent-modal'); if (modal) modal.style.display = 'flex'; }
+        window.setTimeout(configChanged,300);
+      };
       cd.appendChild(ks);
+      var consentModal = E('div',{id:'cf-pages-token-consent-modal',style:'display:none;position:fixed;z-index:1000;inset:0;background:rgba(15,23,42,.48);align-items:center;justify-content:center;padding:20px'});
+      var consentCard = E('div',{style:'max-width:520px;width:100%;background:#fff;border-radius:16px;padding:20px;box-shadow:0 20px 50px rgba(15,23,42,.25)'});
+      consentCard.appendChild(E('h3',{style:'margin:0 0 10px;color:#1e293b'},'Cloudflare Pages 发布授权'));
+      consentCard.appendChild(E('p',{style:'font-size:13px;line-height:1.7;color:#475569'},'Pages 发布需要创建一个仅用于本路由器发布的 Cloudflare API Token。它仅授予当前 Cloudflare 账户的 Pages 写入权限，安全保存于本路由器，不会在页面、日志、部署结果或下载文件中显示。'));
+      var consentCheck = E('input',{type:'checkbox',id:'cf-pages-token-consent-check'});
+      var consentLabel = E('label',{style:'display:flex;gap:8px;align-items:flex-start;margin:14px 0;font-size:13px;color:#334155;cursor:pointer'});
+      consentLabel.appendChild(consentCheck); consentLabel.appendChild(E('span',{},'我已知晓并同意创建及保存仅用于 Cloudflare Pages 发布的 API Token。'));
+      consentCard.appendChild(consentLabel);
+      var consentActions=E('div',{style:'display:flex;justify-content:flex-end;gap:8px'});
+      var cancelConsent=E('button',{type:'button',class:'cf-btn cf-btn-outline'},'取消');
+      cancelConsent.onclick=function(){consentModal.style.display='none';ks.value='github';togglePlatform('github');sv('deploy_platform','github');};
+      var confirmConsent=E('button',{type:'button',class:'cf-btn cf-btn-primary',disabled:true},'同意并创建 Token');
+      consentCheck.onchange=function(){confirmConsent.disabled=!this.checked;};
+      confirmConsent.onclick=function(){confirmConsent.disabled=true;confirmConsent.textContent='创建中...';sv('cf_pages_token_consent','1').then(function(){return fs.exec('/usr/bin/cf-ip-speed-pages-token-create');}).then(function(r){showSimpleModal('Pages 发布 Token',textOf(r));consentModal.style.display='none';}).catch(function(e){showSimpleModal('创建失败','未能创建 Pages 发布 Token，请检查凭据与账户权限。');confirmConsent.disabled=false;confirmConsent.textContent='同意并创建 Token';});};
+      consentActions.appendChild(cancelConsent);consentActions.appendChild(confirmConsent);consentCard.appendChild(consentActions);consentModal.appendChild(consentCard);document.body.appendChild(consentModal);
 
       var gd=E('div',{id:'cf-deploy-github-fields'});if(platform!=='github')gd.style.display='none';
       gd.appendChild(inp('cf-deploy-gh-token','GitHub Token',githubToken,'password','Personal Access Token'));
@@ -736,7 +778,8 @@ o.rmempty = true;
         E('button',{type:'button',class:'cf-btn cf-btn-primary',onclick:function(){saveToken('github');window.setTimeout(configChanged,500);}},'保存'),
         E('button',{type:'button',class:'cf-btn cf-btn-outline',onclick:function(){var v=document.getElementById('cf-deploy-gh-token');if(v&&v.value)fs.exec('/usr/bin/cf-ip-speed-token-check',['github',v.value]).then(function(r){showSimpleModal('检查结果',textOf(r));});}},'检查')
       ]));
-      gd.appendChild(inp('cf-deploy-gh-repo','仓库名称',repo,'text','cloudflare-ip-speed-results'));
+      gd.appendChild(inp('cf-deploy-gh-repo','仓库名称',repo,'text','owner/repository',function(){sv('deploy_repo',this.value);window.setTimeout(configChanged,300);}));
+      gd.appendChild(inp('cf-deploy-gh-branch','分支',ghBranch,'text','main',function(){sv('deploy_branch',this.value);window.setTimeout(computeDeployUrl,100);}));
       cd.appendChild(gd);
 
       var cfd=E('div',{id:'cf-deploy-cf-fields'});if(platform!=='cloudflare')cfd.style.display='none';
@@ -767,20 +810,31 @@ o.rmempty = true;
       var sdw=E('div',{style:'margin:8px 0'});sdw.appendChild(E('div',{class:'cf-label'},'自定义二级域名'));sdw.appendChild(E('div',{style:'display:flex;gap:6px;align-items:center'},[sd]));cfd.appendChild(sdw);
       cd.appendChild(cfd);
 
-      // 预先计算的部署地址
+      // 预先计算的部署地址（可点击访问）
       cd.appendChild(E('div',{style:'margin-top:12px'}));
       cd.appendChild(E('div',{class:'cf-label'},'部署地址'));
-      var urlInp = E('input',{id:'cf-deploy-url-display',type:'text',class:'cf-input',style:'width:100%;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#f8fafc;color:#2563eb;font-weight:600;box-sizing:border-box',readonly:true});
-      cd.appendChild(urlInp);
+      var urlWrap = E('div',{style:'display:flex;gap:6px;align-items:center'});
+      var urlLink = E('a',{id:'cf-deploy-url-display',href:'#',target:'_blank',style:'flex:1;display:block;padding:10px 14px;border:1px solid #e2e8f0;border-radius:12px;font-size:13px;background:#f0f4ff;color:#2563eb;font-weight:600;text-decoration:none;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'},'配置后自动生成');
+      urlLink.onclick = function() {
+        var url = this.textContent;
+        if (url && url !== '配置后自动生成' && url.startsWith('http')) {
+          window.open(url, '_blank');
+        }
+        return false;
+      };
+      urlWrap.appendChild(urlLink);
+      var cb2=E('button',{type:'button',class:'cf-btn cf-btn-outline',style:'min-width:44px;padding:0 12px;height:42px'},'复制');
+      cb2.onclick=function(){var t=document.getElementById('cf-deploy-url-display');if(t){var url=t.textContent;if(url&&url!=='配置后自动生成'){navigator.clipboard.writeText(url).then(function(){ui.addNotification(null,E('p','已复制'));}).catch(function(){});}}};
+      urlWrap.appendChild(cb2);
+      cd.appendChild(urlWrap);
+      var linkBox = E('div',{id:'cf-deploy-links',style:'display:none;margin-top:10px;padding:8px 10px;border:1px solid #dbeafe;border-radius:10px;background:#f8fbff'});
+      cd.appendChild(linkBox);
 
-      // 部署 + 复制按钮
+      // 部署按钮
       cd.appendChild(E('div',{style:'display:flex;gap:8px;margin:12px 0'}));
       var db=E('button',{type:'button',id:'cf-deploy-btn',class:'cf-btn cf-btn-primary',style:'flex:1'},'立即部署');
       db.onclick=deployNow;
       cd.appendChild(db);
-      var cb=E('button',{type:'button',class:'cf-btn cf-btn-outline'},'复制地址');
-      cb.onclick=function(){var t=document.getElementById('cf-deploy-url-display');if(t&&t.value){navigator.clipboard.writeText(t.value).then(function(){ui.addNotification(null,E('p','已复制'));}).catch(function(){t.select();document.execCommand('copy');});}};
-      cd.appendChild(cb);
       cd.appendChild(E('textarea',{id:'cf-deploy-result',class:'cbi-input-textarea',style:'width:100%;min-height:80px;margin-top:10px;font-size:11px;font-family:monospace;border-radius:12px;padding:10px 12px;box-sizing:border-box',readonly:true,placeholder:'部署结果'}));
 
       c.appendChild(cd);

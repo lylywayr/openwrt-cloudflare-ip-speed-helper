@@ -115,6 +115,21 @@ version_label() {
 	[ "$1" = "v6" ] && echo "IPv6" || echo "IPv4"
 }
 
+# Map edge colo (IATA code) to country/region. Do not infer city from client headers.
+colo_country() {
+	case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
+		HKG) echo "HK" ;; TPE|KHH) echo "TW" ;; NRT|HND|KIX|NGO|FUK) echo "JP" ;;
+		ICN|PUS) echo "KR" ;; SIN) echo "SG" ;; BKK) echo "TH" ;; KUL) echo "MY" ;; CGK) echo "ID" ;; MNL) echo "PH" ;;
+		SJC|LAX|SEA|ORD|DFW|IAD|EWR|ATL|MIA|DEN|PHX|LAS|SFO) echo "US" ;;
+		YVR|YYZ|YUL) echo "CA" ;; GRU|GIG) echo "BR" ;; LHR|LGW|MAN|EDI) echo "GB" ;;
+		CDG|MRS) echo "FR" ;; FRA|MUC|DUS|HAM) echo "DE" ;; AMS) echo "NL" ;; MAD|BCN) echo "ES" ;;
+		FCO|MXP) echo "IT" ;; ZRH) echo "CH" ;; WAW) echo "PL" ;; ARN) echo "SE" ;; HEL) echo "FI" ;;
+		IST) echo "TR" ;; TLV) echo "IL" ;; DXB|AUH) echo "AE" ;; DOH) echo "QA" ;;
+		JNB|CPT) echo "ZA" ;; SYD|MEL|BNE|PER) echo "AU" ;; AKL) echo "NZ" ;;
+		*) echo "" ;;
+	esac
+}
+
 cache_file_for_version() {
 	[ "$1" = "v6" ] && echo "$CACHE_V6_FILE" || echo "$CACHE_V4_FILE"
 }
@@ -295,8 +310,9 @@ remove_cache_ip() {
 }
 
 make_cache_record() {
-	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
-		"$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}"
+	# ip,port,colo,country,source,fail_count,last_loss,last_speed,last_latency,last_updated
+	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' \
+		"$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
 }
 
 sort_cache_file() {
@@ -310,11 +326,11 @@ sort_cache_file() {
 
 	awk -F',' '
 	NF {
-		fail = ($7 == "" ? 0 : $7) + 0
+		fail = ($6 == "" ? 0 : $6) + 0
 		group = (fail > 0 ? 1 : 0)
-		loss = ($8 == "" ? 1.0000 : $8) + 0
-		speed = ($9 == "" ? 0.00 : $9) + 0
-		latency = ($10 == "" ? 999999 : $10) + 0
+		loss = ($7 == "" ? 1.0000 : $7) + 0
+		speed = ($8 == "" ? 0.00 : $8) + 0
+		latency = ($9 == "" ? 999999 : $9) + 0
 		loss_rank = int((loss * 10000) + 0.5)
 		speed_rank = 999999999 - int((speed * 100) + 0.5)
 		latency_rank = int((latency * 100) + 0.5)
@@ -336,7 +352,7 @@ normalize_cache_file() {
 		line="$(trim "$raw_line")"
 		[ -n "$line" ] || continue
 		case "$line" in \#*) continue ;; esac
-		IFS=',' read -r c_ip c_port c_colo c_country c_city c_source c_fail c_loss c_speed c_latency c_updated <<EOF
+		IFS=',' read -r c_ip c_port c_colo c_country c_source c_fail c_loss c_speed c_latency c_updated <<EOF
 $line
 EOF
 		c_ip="$(trim "$c_ip")"
@@ -349,8 +365,7 @@ EOF
 		c_port="$(printf '%s' "$(trim "${c_port:-443}")" | sed 's/[^0-9]//g')"
 		[ -n "$c_port" ] || c_port="443"
 		c_colo="$(trim "${c_colo:-N/A}")"
-		c_country=""
-		c_city=""
+		c_country="$(trim "${c_country:-}")"
 		c_source="$(trim "${c_source:-manual}")"
 		c_fail="$(printf '%s' "$(trim "${c_fail:-0}")" | sed 's/[^0-9]//g')"
 		[ -n "$c_fail" ] || c_fail="0"
@@ -367,7 +382,7 @@ EOF
 		c_latency="$(trim "${c_latency:-999999}")"
 		[ -n "$c_latency" ] || c_latency="999999"
 		c_updated="$(trim "${c_updated:-}")"
-		printf '%s\n' "$(make_cache_record "$c_ip" "$c_port" "$c_colo" "$c_country" "$c_city" "$c_source" "$c_fail" "$c_loss" "$c_speed" "$c_latency" "$c_updated")" >> "$tmp_file"
+		printf '%s\n' "$(make_cache_record "$c_ip" "$c_port" "$c_colo" "$c_country" "$c_source" "$c_fail" "$c_loss" "$c_speed" "$c_latency" "$c_updated")" >> "$tmp_file"
 	done < "$cache_file"
 
 	awk -F',' '!seen[$1]++' "$tmp_file" > "${tmp_file}.dedup"
@@ -637,8 +652,10 @@ measure_target_meta() {
 	header_output="$(printf '%s' "$header_output" | tr -d '\r')"
 	colo="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="colo"{print $2; exit}')"
 	[ -n "$colo" ] || colo="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="x-cf-colo"{print $2; exit}')"
-	country=""
-	city=""
+	country="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="country"{print $2; exit}')"
+	[ -n "$country" ] || country="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="x-cf-country"{print $2; exit}')"
+	city="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="city"{print $2; exit}')"
+	[ -n "$city" ] || city="$(printf '%s\n' "$header_output" | awk -F': *' 'tolower($1)=="x-cf-city"{print $2; exit}')"
 
 	speed_mb="0.00"
 	if [ -n "$speed_bytes" ] && [ "$speed_bytes" != "0" ]; then
@@ -700,7 +717,7 @@ import_cache_base64() {
 		line="$(trim "$raw_line")"
 		[ -n "$line" ] || continue
 		case "$line" in \#*) continue ;; esac
-		IFS=',' read -r c_ip c_port c_colo c_country c_city c_source c_fail c_loss c_speed c_latency c_updated <<EOF
+		IFS=',' read -r c_ip c_port c_colo c_country c_source c_fail c_loss c_speed c_latency c_updated <<EOF
 $line
 EOF
 		c_ip="$(trim "$c_ip")"
@@ -784,6 +801,7 @@ sync_edgetunnel_add() {
 	[ "$enabled" = "1" ] || return 0
 
 	base_url="$(cfg edgetunnel_sync_url)"
+	password="$(cfg edgetunnel_sync_password)"
 	[ -n "$base_url" ] || {
 		log "edgetunnel sync skipped: missing URL"
 		return 0
@@ -1082,7 +1100,6 @@ save_result_state() {
 	result_file="$2"
 	display_summary="$(awk -F',' -v top_n="$DISPLAY_TOP_N" '
 	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
-	NR == 1 { next }
 	NF >= 11 && count < top_n {
 		if (!first) printf "|"
 		printf "%s~%s~%s~%s~%s~%s~%s~%s~%s",
@@ -1096,7 +1113,7 @@ save_result_state() {
 
 	best_fields="$(awk -F',' '
 	function trim(v){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); return v }
-	NR == 2 {
+	NR == 1 {
 		print trim($1) "\t" trim($8) "\t" trim($5) "\t" trim($6) "\t" trim($4) "\t" trim($7) "\t" trim($9) "\t" trim($10) "\t" trim($11)
 		exit
 	}' "$result_file" 2>/dev/null || true)"
@@ -1187,8 +1204,9 @@ run_cfst_for_version() {
 					[ "$speed_ok" = "1" ] || continue
 					[ "$loss_ok" = "1" ] || continue
 					now_val="$(date '+%Y-%m-%d %H:%M:%S')"
-					printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s,%s\n' \
-						"$cf_ip" "$cf_latency" "$cf_speed" "$cf_colocode" "$cf_port" "" "" "$now_val" >> "$all_merged"
+					cf_country="$(colo_country "$cf_colocode")"
+					printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s\n' \
+						"$cf_ip" "$cf_latency" "$cf_speed" "$cf_colocode" "$cf_port" "$cf_country" "$now_val" >> "$all_merged"
 				done
 				exec 3<&-
 			fi
@@ -1209,7 +1227,8 @@ run_cfst_for_version() {
 
 	# 更新缓存（取前 CACHE_FILL_TOP_N 行）
 	: > "$cache_file"
-	head -n "$CACHE_FILL_TOP_N" "$result_file" > "$cache_file"
+	# Cache schema: ip,port,colo,country,source,fail_count,last_loss,last_speed,last_latency,last_updated
+	awk -F',' -v limit="$CACHE_FILL_TOP_N" 'NR<=limit { printf "%s,%s,%s,%s,%s,0,0,%s,%s,%s\n",$1,$8,$7,$9,$4,$6,$5,$11 }' "$result_file" > "$cache_file"
 
 	save_result_state "$ip_version" "$result_file"
 	normalize_cache_file "$ip_version"

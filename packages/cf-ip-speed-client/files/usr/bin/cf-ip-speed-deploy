@@ -1,101 +1,31 @@
 #!/bin/sh
 set -eu
-cfg(){ uci -q get cf_ip_speed_client.main.$1 2>/dev/null || true; }
-work=/tmp/cf-ip-speed-client
-out=$work/ADD.txt
-mkdir -p "$work" /etc/cf-ip-speed-client
-: > "$out"
-
-cache_v4=/etc/cf-ip-speed-client/cache-v4.txt
-cache_v6=/etc/cf-ip-speed-client/cache-v6.txt
-
-echo "# Cloudflare IP Speed Results" > "$out"
-echo "# Generated: $(TZ=CST-8 date '+%Y-%m-%d %H:%M:%S CST')" >> "$out"
-echo "" >> "$out"
-
-# 生成 edgetunnel 兼容格式: 纯 IP:端口
-echo "## 优选结果" >> "$out"
-echo "# 生成时间: $(TZ=CST-8 date '+%Y-%m-%d %H:%M:%S CST')" >> "$out"
-echo "" >> "$out"
-for f in "$cache_v4" "$cache_v6"; do
-  [ -f "$f" ] || continue
-  awk -F',' 'NF && $1!="" {printf "%s:%s\\n",$1,($2?$2:"443")}' "$f" 2>/dev/null >> "$out"
+cfg(){ uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
+work=/tmp/cf-ip-speed-client; dir="$work/publish"; mkdir -p "$dir"; rm -f "$dir"/*
+all="$dir/ADD.txt"; : > "$all"
+for cache in /etc/cf-ip-speed-client/cache-v4.txt /etc/cf-ip-speed-client/cache-v6.txt; do
+ [ -f "$cache" ] || continue
+ awk -F',' 'NF>=2&&$1!=""{p=$2+0;if(!p)p=443;if(index($1,":")>0)line="["$1"]:"p;else line=$1":"p;print p"|"line}' "$cache" >> "$dir/raw"
 done
-echo "" >> "$out"
-# 先输出内容（前端可读）
-[ -s "$out" ] && cat "$out" || { echo "没有可用的结果"; exit 1; }
-echo "---"
-
-platform=$(cfg deploy_platform)
-file=$(cfg deploy_filename)
-[ -n "$file" ] || file=ADD.txt
+[ -s "$dir/raw" ] || { echo '没有可部署的优选结果，请先执行优选'; exit 1; }
+sort -t'|' -k1,1n -k2,2 -u "$dir/raw" > "$dir/sorted"; cut -d'|' -f2 "$dir/sorted" > "$all"; ports=$(cut -d'|' -f1 "$dir/sorted"|sort -n -u)
+for p in $ports; do awk -F'|' -v p="$p" '$1==p{print $2}' "$dir/sorted" > "$dir/ADD-$p.txt"; done
+rm -f "$dir/raw" "$dir/sorted"; printf '%s\n' '<!doctype html><meta charset="utf-8"><title>CF IP Results</title><a href="ADD.txt">ADD.txt</a>' > "$dir/index.html"
+platform=$(cfg deploy_platform); mainfile=$(cfg deploy_filename); [ -n "$mainfile" ] || mainfile=ADD.txt; [ "$mainfile" = ADD.txt ] || cp "$all" "$dir/$mainfile"
 case "$platform" in
-  github)
-    token=$(cfg github_token)
-    repo=$(cfg deploy_repo)
-    branch=$(cfg deploy_branch)
-    [ -n "$branch" ] || branch=main
-    [ -n "$token" ] && [ -n "$repo" ] || { echo 'GitHub 配置不完整'; exit 1; }
-    user=$(curl -fsS -H "Authorization: Bearer $token" https://api.github.com/user | grep -o '"login"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-    [ -n "$user" ] || { echo 'GitHub Token 无效'; exit 1; }
-    # 检查仓库
-    check=$(curl -fsS -H "Authorization: Bearer $token" "https://api.github.com/repos/$user/$repo" 2>/dev/null || echo '{}')
-    name=$(echo "$check" | grep -o '"name":"[^"]*"' | head -1) || name=''
-    [ -n "$name" ] || {
-      curl -fsS -X POST -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' "https://api.github.com/user/repos" -d "{\"name\":\"$repo\",\"private\":false,\"auto_init\":true}" >/dev/null || { echo '仓库创建失败'; exit 1; }
-    }
-    b64=$(cat "$out" | openssl enc -base64 -A 2>/dev/null)
-    curl -fsS -X PUT -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json' "https://api.github.com/repos/$user/$repo/contents/$file" -d "{\"message\":\"update $file\",\"branch\":\"$branch\",\"content\":\"$b64\"}" >/dev/null || { echo '上传失败'; exit 1; }
-    echo "https://raw.githubusercontent.com/$user/$repo/$branch/$file"
-    ;;
-  cloudflare)
-    key=$(cfg cloudflare_global_api_key)
-    email=$(cfg cloudflare_email)
-    project=$(cfg cf_pages_project)
-    domain_mode=$(cfg cf_pages_domain_mode)
-    zone_name=$(cfg cf_pages_zone)
-    subdomain=$(cfg cf_pages_subdomain)
-    [ -n "$key" ] && [ -n "$email" ] && [ -n "$project" ] || { echo 'Cloudflare 配置不完整'; exit 1; }
-    aid=$(curl -s -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" 'https://api.cloudflare.com/client/v4/accounts' 2>/dev/null | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-    [ -n "$aid" ] || { echo 'Cloudflare 认证失败'; exit 1; }
-    tmpd="/tmp/cf-pages-$$"
-    mkdir -p "$tmpd"
-    cp "$out" "$tmpd/$file"
-    cat > "$tmpd/index.html" << 'HTMLEOF'
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>CF IP Speed Results</title><meta http-equiv="refresh" content="0;url=ADD.txt"><style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc}div{text-align:center}h2{font-weight:600}</style></head><body><div><h2>CF IP Speed Results</h2><p>查看 <a href="ADD.txt">ADD.txt</a></p></div></body></html>
-HTMLEOF
-    # 检测项目是否存在
-    proj_check=true
-    [ -n "$proj_check" ] || {
-      true # project exists
-    }
-    manifest="{\"$file\":\"$file\",\"index.html\":\"index.html\"}"
-    deploy_resp=$(curl -fsS -X POST --connect-timeout 15 --max-time 60 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" \
-      "https://api.cloudflare.com/client/v4/accounts/${aid}/pages/projects/${project}/deployments" \
-      -F "metadata={\"body\":\"CF IP Speed Results\"}" \
-      -F "manifest=${manifest}" \
-      -F "$file=@$tmpd/$file" \
-      -F "index.html=@$tmpd/index.html" 2>/dev/null) || { echo 'Pages 部署失败'; exit 1; }
-    # deploy check skipped (grep quote issue)
-    true
-    # 从部署响应中获取 url
-    deploy_url_line=$(echo "$deploy_resp" | awk 'BEGIN{RS=",";FS="\""} $2=="url"{print $4;exit}')
-    # 从中提取域名: https://xxxx.project.pages.dev
-    deploy_base=$(printf '%s' "$deploy_url_line" | sed 's|^https://||;s|/.*||')
-    deploy_url="https://${deploy_base}/${file}"
-    # 自定义域名绑定
-    if [ "$domain_mode" = "custom" ] && [ -n "$zone_name" ] && [ -n "$subdomain" ]; then
-      full_domain="${subdomain}.${zone_name}"
-      existing=$(curl -fsS -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "https://api.cloudflare.com/client/v4/accounts/${aid}/pages/projects/${project}/domains" 2>/dev/null | grep -o "\"name\":\"${full_domain}\"" || true)
-      [ -n "$existing" ] || {
-        curl -fsS -X POST -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" -H 'Content-Type: application/json' \
-          "https://api.cloudflare.com/client/v4/accounts/${aid}/pages/projects/${project}/domains" \
-          -d "{\"name\":\"${full_domain}\"}" >/dev/null 2>&1 || true
-      }
-      deploy_url="https://${full_domain}/${file}"
-    fi
-    rm -rf "$tmpd"
-    echo "$deploy_url"
-    ;;
-  *) echo '未配置部署平台'; exit 1;;
+github)
+ token=$(cfg github_token); repo=$(cfg deploy_repo); branch=$(cfg deploy_branch); [ -n "$branch" ] || branch=main; [ -n "$token" ]&&[ -n "$repo" ] || { echo 'GitHub 配置不完整'; exit 1; }
+ if echo "$repo"|grep -q /;then full="$repo";else user=$(curl -fsS -H "Authorization: Bearer $token" https://api.github.com/user|sed -n 's/.*"login":"\([^"]*\)".*/\1/p'|head -1);full="$user/$repo";fi
+ [ -n "$full" ]||{ echo 'GitHub Token 无效';exit 1; }; for f in "$dir"/*.txt;do n=$(basename "$f");b=$(openssl enc -base64 -A <"$f");old=$(curl -s -H "Authorization: Bearer $token" "https://api.github.com/repos/$full/contents/$n?ref=$branch");sha=$(printf %s "$old"|tr ',' '\n'|awk -F'"' '/"sha"/{print $4;exit}');body="{\"message\":\"update CF IP results\",\"branch\":\"$branch\",\"content\":\"$b\"";[ -z "$sha" ]||body="$body,\"sha\":\"$sha\"";curl -fsS -X PUT -H "Authorization: Bearer $token" -H 'Content-Type: application/json' "https://api.github.com/repos/$full/contents/$n" -d "$body}" >/dev/null;done; base="https://raw.githubusercontent.com/$full/$branch"
+ ;;
+cloudflare)
+ token=$(cfg cf_pages_api_token); aid=$(cfg cf_pages_account_id); project=$(cfg cf_pages_project); mode=$(cfg cf_pages_domain_mode); zone=$(cfg cf_pages_zone); sub=$(cfg cf_pages_subdomain); key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email); [ -n "$token" ]&&[ -n "$aid" ]&&[ -n "$project" ] || { echo 'Pages 发布 Token 尚未创建或 Pages 配置不完整';exit 1; }; command -v wrangler >/dev/null 2>&1||{ echo 'Wrangler 未安装';exit 1; }
+ if [ "$mode" = custom ]; then [ -n "$zone" ]&&[ -n "$sub" ]&&[ -n "$key" ]&&[ -n "$email" ] || { echo '自定义域名配置不完整'; exit 1; }; domain="$sub.$zone"; curl -sS --connect-timeout 15 --max-time 60 -X POST -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" -H 'Content-Type: application/json' "https://api.cloudflare.com/client/v4/accounts/$aid/pages/projects/$project/domains" -d "{\"name\":\"$domain\"}" >/dev/null 2>&1 || true; fi
+ CLOUDFLARE_API_TOKEN="$token" CLOUDFLARE_ACCOUNT_ID="$aid" wrangler pages deploy "$dir" --project-name "$project" --branch main >/tmp/cf-ip-speed-client/wrangler-deploy.log 2>&1 || { sed -E 's/(api[_ -]?token|authorization)[^ ]*/[敏感信息已隐藏]/Ig' /tmp/cf-ip-speed-client/wrangler-deploy.log; exit 1; }
+ deploy_url=$(sed -n 's/.*https:\/\/\([^ ]*\.pages\.dev\).*/https:\/\/\1/p' /tmp/cf-ip-speed-client/wrangler-deploy.log | tail -1); [ -n "$deploy_url" ] || { echo 'Pages 未返回部署地址'; exit 1; }
+ for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done);do code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$deploy_url/$f"||true); [ "$code" = 200 ] || { echo "Pages 预览校验失败：$f HTTP $code";exit 1;};done
+ if [ "$mode" = custom ]; then base="https://$domain"; for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done);do ok=0;for wait in 0 3 8 15;do [ "$wait" = 0 ]||sleep "$wait";code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$base/$f"||true);[ "$code" = 200 ]&&{ ok=1;break;};done;[ "$ok" = 1 ]||{ echo "自定义域名校验失败：$f HTTP $code";exit 1;};done; else base="https://$project.pages.dev"; fi
+ ;;
+*) echo '未配置部署平台';exit 1;;
 esac
+echo "$base/ADD.txt";for p in $ports;do echo "$base/ADD-$p.txt";done
