@@ -12,12 +12,21 @@ key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email)
 api=https://api.cloudflare.com/client/v4
 cf(){ curl -fsS --connect-timeout 15 --max-time 90 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$@"; }
 log '1/4 正在读取 Cloudflare 账户…'
-aid=$(cf "$api/accounts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'|head -1); [ -n "$aid" ] || { log '错误：无法读取 Cloudflare 账户'; exit 1; }
+aid=$(cfg cf_pages_account_id)
+if [ -z "$aid" ]; then
+  aid=$(cf "$api/accounts" | jsonfilter -e '@.result[0].id' 2>/dev/null || true)
+fi
+[ -n "$aid" ] || { log '错误：无法读取 Cloudflare 账户'; exit 1; }
 name=$(cfg cf_speed_worker_name); [ -n "$name" ] || name=cf-speed-test
 # Binary-safe streaming response; default 10 MiB, bounded at 100 MiB.
 cat >/tmp/cf-speed-worker.js <<'JS'
-export default { async fetch(request) { const u=new URL(request.url); if (u.pathname !== '/__down') return new Response('CF Speed Test endpoint: /__down?bytes=N',{status:404}); let n=Number(u.searchParams.get('bytes')||10485760); if(!Number.isFinite(n)||n<1)n=10485760;n=Math.min(Math.floor(n),104857600); const chunk=new Uint8Array(65536); crypto.getRandomValues(chunk); let left=n; return new Response(new ReadableStream({pull(c){if(left<=0){c.close();return;}let size=Math.min(left,chunk.length);c.enqueue(chunk.slice(0,size));left-=size;}}),{headers:{'content-type':'application/octet-stream','content-length':String(n),'cache-control':'no-store'}}); } };
+// Service-worker syntax is accepted by the Workers script upload endpoint without module metadata.
+addEventListener('fetch', function(event) { event.respondWith(handle(event.request)); });
+async function handle(request) { const u=new URL(request.url); if (u.pathname !== '/__down') return new Response('CF Speed Test endpoint: /__down?bytes=N',{status:404}); let n=Number(u.searchParams.get('bytes')||10485760); if(!Number.isFinite(n)||n<1)n=10485760;n=Math.min(Math.floor(n),104857600); let left=n; return new Response(new ReadableStream({pull(c){if(left<=0){c.close();return;}let size=Math.min(left,65536);c.enqueue(new Uint8Array(size));left-=size;}}),{headers:{'content-type':'application/octet-stream','cache-control':'no-store'}}); }
 JS
+# Worker script name has been checked by preflight. Refuse overwrite here as defense in depth.
+exists=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 30 -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" "$api/accounts/$aid/workers/scripts/$name" || true)
+[ "$exists" != 200 ] || { log "错误：Worker 名称 $name 已存在，已停止以避免覆盖已有项目"; exit 1; }
 log '2/4 正在上传测速 Worker…'
 cf -X PUT "$api/accounts/$aid/workers/scripts/$name" -H 'Content-Type: application/javascript' --data-binary @/tmp/cf-speed-worker.js >/dev/null
 mode=$(cfg cf_speed_worker_domain_mode); zone=$(cfg cf_speed_worker_zone); sub=$(cfg cf_speed_worker_subdomain)
@@ -29,6 +38,12 @@ if [ "$mode" = custom ] && [ -n "$zone" ] && [ -n "$sub" ]; then
  # A proxied placeholder DNS record is required before a Worker Route can match.
  cf -X POST "$api/zones/$zid/dns_records" -H 'Content-Type: application/json' -d "{\"type\":\"A\",\"name\":\"$host\",\"content\":\"192.0.2.1\",\"proxied\":true,\"ttl\":1}" >/dev/null 2>&1 || true
  cf -X POST "$api/zones/$zid/workers/routes" -H 'Content-Type: application/json' -d "{\"pattern\":\"$host/*\",\"script\":\"$name\"}" >/dev/null 2>&1 || true
+ # Cloudflare may accept an API DNS record for a zone that is not publicly delegated.
+ # Query the router's configured resolver: it is the resolver cfst will use later.
+ if ! nslookup "$host" >/dev/null 2>&1; then
+   log "错误：$host 尚未被路由器 DNS 解析。请等待 DNS 生效，或在路由器 DNS 设置中更换为可解析该域名的 DNS。"
+   exit 1
+ fi
  url="https://$host/__down"
 else
  log '3/4 正在读取 workers.dev 子域名…'

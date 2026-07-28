@@ -1,5 +1,5 @@
 #!/bin/sh
 mkdir -p /tmp/cf-ip-speed-client
 : > /tmp/cf-ip-speed-client/worker-create.log
-/usr/bin/cf-ip-speed-worker-create >>/tmp/cf-ip-speed-client/worker-create.log 2>&1 &
+/usr/bin/cf-ip-speed-worker-create >/dev/null 2>&1 &
 echo started
