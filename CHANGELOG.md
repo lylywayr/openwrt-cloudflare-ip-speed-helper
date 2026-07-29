@@ -1,7 +1,15 @@
+<<<<<<< HEAD
 ## 0.2.5
 
 - 同步 v0.2.4-beta.4：仅 HKG/LAX/SJC 机房、每端口每机房前 10 个零丢包候选、单线程无阈值下载测速。
 - 改进移动端实时日志、EdgeTunnel 测速注释和 Pages 自定义域名自动绑定。
+=======
+## 0.2.4-beta.5
+
+- 自动生成测速地址改为 Cloudflare Pages 静态 10 MiB 文件，不创建或调用 Worker，避免消耗 Workers 请求额度。
+- 每次 Pages 发布自动生成并验证 `__speed/10m.bin`，完成后自动回填 Pages 静态测速 URL。
+- 发布前去敏：移除 EdgeTunnel 私人域名示例，默认配置不含私人域名、账户或凭据。
+>>>>>>> beta
 
 ## 0.2.4-beta.4
 

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Create a static Pages speed-test URL. No Worker is created or invoked.
+set -eu
+work=/tmp/cf-ip-speed-client
+logf="$work/static-speed-create.log"
+mkdir -p "$work"
+[ "${1:-}" = status ] && { cat "$logf" 2>/dev/null || true; exit 0; }
+: > "$logf"
+log(){ echo "$*" | tee -a "$logf"; }
+cfg(){ uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
+[ "$(cfg cf_pages_token_consent)" = 1 ] || { log '错误：请先在 Cloudflare Pages 区域勾选部署授权'; exit 0; }
+project=$(cfg cf_pages_project); [ -n "$project" ] || { log '错误：请先填写 Cloudflare Pages 项目名'; exit 0; }
+log '1/3 正在生成并发布 Pages 静态测速文件…'
+out=$(/usr/bin/cf-ip-speed-deploy 2>&1) || { printf '%s\n' "$out" >> "$logf"; log '错误：Pages 部署失败'; exit 0; }
+printf '%s\n' "$out" >> "$logf"
+url=$(printf '%s\n' "$out" | sed -n 's#\(https://[^ ]*\)/ADD\.txt#\1/__speed/10m.bin#p' | head -1)
+[ -n "$url" ] || { log '错误：无法从 Pages 部署结果读取地址'; exit 0; }
+log '2/3 正在验证 10 MiB 静态测速文件…'
+code=$(curl -kLsS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 75 "$url" || true)
+[ "$code" = 200 ] || { log "错误：静态测速文件验证失败（HTTP $code）"; exit 0; }
+log '3/3 正在保存测速地址…'
+uci set "cf_ip_speed_client.main.test_url=$url"
+uci set "cf_ip_speed_client.main.cf_speed_test_mode=pages_static"
+uci commit cf_ip_speed_client
+log "完成：$url"
