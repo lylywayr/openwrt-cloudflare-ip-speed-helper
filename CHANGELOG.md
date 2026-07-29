@@ -1,3 +1,9 @@
+## 0.2.4-beta.5
+
+- 自动生成测速地址改为 Cloudflare Pages 静态 10 MiB 文件，不创建或调用 Worker，避免消耗 Workers 请求额度。
+- 每次 Pages 发布自动生成并验证 `__speed/10m.bin`，完成后自动回填 Pages 静态测速 URL。
+- 发布前去敏：移除 EdgeTunnel 私人域名示例，默认配置不含私人域名、账户或凭据。
+
 ## 0.2.4-beta.4
 
 - 优选限定 HKG、LAX、SJC 三个机房；每个端口独立保留丢包率为 0、延迟最低的前 10 个候选。

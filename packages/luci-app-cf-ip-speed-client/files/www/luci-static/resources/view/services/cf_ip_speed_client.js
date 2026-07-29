@@ -591,7 +591,7 @@ o.rmempty = true;
     o.description = '可手动填写测速下载地址；<a href="/luci-static/resources/cf-ip-speed-client/custom-speed-test-tutorial.html" target="_blank">如何创建自定义测速地址？</a>';
     o.rmempty = true;
 
-    var speedWorker = s.taboption('basic', form.DummyValue, '_speed_worker', '自动创建测速地址');
+    var speedWorker = s.taboption('basic', form.DummyValue, '_speed_worker', '生成静态测速地址');
     speedWorker.rawhtml = true;
     speedWorker.cfgvalue = function(sectionId) { return renderSpeedWorkerWidget(this.map, sectionId); };
 
@@ -1006,26 +1006,16 @@ o.rmempty = true;
 });
 
 function renderSpeedWorkerWidget(map, sectionId) {
-  var consent = uciGet(map, sectionId, 'cf_speed_worker_consent') === '1';
-  var mode = uciGet(map, sectionId, 'cf_speed_worker_domain_mode') || 'workers';
-  var zone = uciGet(map, sectionId, 'cf_speed_worker_zone') || '';
-  var sub = uciGet(map, sectionId, 'cf_speed_worker_subdomain') || 'speed';
-  var name = uciGet(map, sectionId, 'cf_speed_worker_name') || 'cf-speed-test';
-  function sv(k,v) { return fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.'+k+'='+v]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']);}); }
-  function input(label,id,value,placeholder) { var w=E('div',{style:'margin:9px 0'});w.appendChild(E('div',{class:'cf-label'},label));var x=E('input',{id:id,type:'text',value:value,placeholder:placeholder||'',class:'cf-input'});w.appendChild(x);return {w:w,x:x}; }
+  var project=uciGet(map,sectionId,'cf_pages_project')||'cloudflare-ip-speed-results';
+  var consent=uciGet(map,sectionId,'cf_pages_token_consent')==='1';
+  function sv(k,v){return fs.exec('/usr/bin/cf-ip-speed-uci',['set','cf_ip_speed_client.main.'+k+'='+v]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-uci',['commit','cf_ip_speed_client']);});}
   var box=E('div',{style:'margin:8px 0 16px;padding:14px;border:1px solid #dbe3f0;border-radius:14px;background:#fbfcff'});
-  box.appendChild(E('div',{style:'font-size:12px;color:#64748b;line-height:1.6;margin-bottom:10px'},'自动创建一个仅用于测速的 Cloudflare Worker。域名为可选：留空即可使用 workers.dev。'));
-  var auth=E('label',{style:'display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:12px;line-height:1.6;cursor:pointer'});
-  var ac=E('input',{type:'checkbox',checked:consent,class:'cbi-input-checkbox',style:'width:21px;height:21px;min-width:21px;margin:0;accent-color:#667eea'});
-  ac.onchange=function(){ if(!this.checked){sv('cf_speed_worker_consent','0');return;} fs.exec('/usr/bin/cf-ip-speed-worker-auth-check',[]).then(function(r){var t=textOf(r);if(/可用|success|有效|ok/i.test(t)){sv('cf_speed_worker_consent','1');}else{this.checked=false;showSimpleModal('无法授权','Cloudflare 凭据无效或尚未保存。请先在“结果部署 → Cloudflare Pages”保存账户邮箱和 Global API Key，再勾选。');}}.bind(this)).catch(function(){this.checked=false;showSimpleModal('无法授权','请先保存并检查 Cloudflare 凭据。');}.bind(this)); };
-  auth.appendChild(ac);auth.appendChild(E('span',{},'我同意本路由器使用已保存的 Cloudflare 凭据创建或更新测速 Worker。未授权时不能创建。'));box.appendChild(auth);
-  var ms=E('select',{class:'cf-select',style:'margin-top:10px'});ms.innerHTML='<option value="workers">使用自动 workers.dev 地址（无需填写域名）</option><option value="custom">使用自己的 Cloudflare 域名</option>';ms.value=mode;box.appendChild(ms);
-  var zw=E('div',{});var ziw=E('div',{style:'margin:9px 0'});ziw.appendChild(E('div',{class:'cf-label'},'已有顶级域名（自动读取）'));var zix=E('select',{id:'cf-speed-worker-zone',class:'cf-select'});zix.dataset.savedZone=zone;zix.innerHTML='<option value="">正在读取已有域名…</option>';ziw.appendChild(zix);var zi={w:ziw,x:zix};var si=input('二级域名前缀','cf-speed-worker-subdomain',sub,'speed');zw.appendChild(zi.w);zw.appendChild(si.w);if(mode!=='custom')zw.style.display='none';box.appendChild(zw);
-  var ni=input('Worker 名称', 'cf-speed-worker-name', name, 'cf-speed-test');box.appendChild(ni.w);
-  ms.onchange=function(){zw.style.display=this.value==='custom'?'':'none';sv('cf_speed_worker_domain_mode',this.value);if(this.value==='custom')loadCfZones();};zi.x.onchange=function(){sv('cf_speed_worker_zone',this.value);};si.x.onchange=function(){sv('cf_speed_worker_subdomain',this.value);};ni.x.onchange=function(){sv('cf_speed_worker_name',this.value);};window.setTimeout(loadCfZones,150);
-  var progress=E('pre',{id:'cf-speed-worker-progress',style:'display:none;white-space:pre-wrap;margin:10px 0 0;padding:10px;border-radius:10px;background:#111827;color:#e5e7eb;font-size:11px;min-height:48px'});
-  var btn=E('button',{type:'button',class:'cf-btn cf-btn-primary',style:'margin-top:11px'},'自动创建测速地址');
-    btn.onclick=function(){if(!ac.checked){showSimpleModal('需要授权','请先勾选上方的 Worker 创建授权。');return;} if(ms.value==='custom'&&(!zi.x.value.trim()||!si.x.value.trim())){showSimpleModal('请完善域名','选择自定义域名时，需要填写顶级域名和二级域名前缀。');return;} btn.disabled=true;btn.textContent='正在检查…';progress.style.display='';progress.textContent='正在检查 Worker 名称、二级域名和路由占用情况…';Promise.all([sv('cf_speed_worker_consent','1'),sv('cf_speed_worker_domain_mode',ms.value),sv('cf_speed_worker_zone',zi.x.value.trim()),sv('cf_speed_worker_subdomain',si.x.value.trim()),sv('cf_speed_worker_name',ni.x.value.trim()||'cf-speed-test')]).then(function(){return fs.exec('/usr/bin/cf-ip-speed-worker-preflight');}).then(function(r){var out=textOf(r);progress.textContent=out;if(!/OK=/.test(out))throw new Error(out||'预检查未通过');btn.textContent='创建中…';return fs.exec('/usr/bin/cf-ip-speed-worker-create-background');}).then(function(){var n=0;var timer=window.setInterval(function(){fs.exec('/usr/bin/cf-ip-speed-worker-create',['status']).then(function(r){var out=textOf(r);progress.textContent=out||'正在连接 Cloudflare…';var m=out.match(/完成：(https?:\/\/[^\s]+)/);if(m||/错误：/.test(out)||n++>50){window.clearInterval(timer);btn.disabled=false;btn.textContent='自动创建测速地址';if(m){var field=document.querySelector('[id$="test_url"]');if(field){field.value=m[1];field.dispatchEvent(new Event('change',{bubbles:true}));}sv('test_url',m[1]);showSimpleModal('测速地址创建完成','已自动填写并保存：\n'+m[1]);}else if(/错误：/.test(out)){showSimpleModal('创建失败',out);}else{showSimpleModal('创建超时','请稍后查看测速地址和创建日志。');}}}).catch(function(){});},1000);}).catch(function(e){btn.disabled=false;btn.textContent='自动创建测速地址';var msg=String(e&&e.message?e.message:e);progress.textContent=msg;showSimpleModal('预检查未通过',msg);});};box.appendChild(btn);box.appendChild(progress);return box;
+  box.appendChild(E('div',{style:'font-size:12px;color:#64748b;line-height:1.65'},'自动生成 Cloudflare Pages 静态测速文件（10 MiB），不创建或调用 Worker，不消耗 Workers 请求额度。'));
+  var pi=E('input',{type:'text',value:project,placeholder:'cloudflare-ip-speed-results',class:'cf-input',style:'margin-top:10px'});box.appendChild(E('div',{class:'cf-label',style:'margin-top:10px'},'Pages 项目名'));box.appendChild(pi);
+  var info=E('div',{style:'font-size:12px;color:#64748b;line-height:1.6;margin-top:8px'},consent?'已获得 Pages 部署授权。':'请先在“结果部署 → Cloudflare Pages”勾选部署授权。');box.appendChild(info);
+  var progress=E('pre',{id:'cf-static-speed-progress',style:'display:none;white-space:pre-wrap;margin:10px 0 0;padding:10px;border-radius:10px;background:#111827;color:#e5e7eb;font-size:11px;min-height:48px'});
+  var btn=E('button',{type:'button',class:'cf-btn cf-btn-primary',style:'margin-top:11px'},'生成静态测速地址');
+  btn.onclick=function(){if(!pi.value.trim()){showSimpleModal('请填写项目名','请先填写 Cloudflare Pages 项目名。');return;}btn.disabled=true;btn.textContent='生成中…';progress.style.display='';progress.textContent='正在保存项目设置并发布静态测速文件…';sv('cf_pages_project',pi.value.trim()).then(function(){return fs.exec('/usr/bin/cf-ip-speed-static-speed-create-background');}).then(function(){var n=0,timer=window.setInterval(function(){fs.exec('/usr/bin/cf-ip-speed-static-speed-create',['status']).then(function(r){var out=textOf(r);progress.textContent=out||'正在发布…';var m=out.match(/完成：(https?:\/\/[^\s]+)/);if(m||/错误：/.test(out)||n++>80){clearInterval(timer);btn.disabled=false;btn.textContent='生成静态测速地址';if(m){var field=document.querySelector('[id$="test_url"]');if(field){field.value=m[1];field.dispatchEvent(new Event('change',{bubbles:true}));}showSimpleModal('静态测速地址已生成','已自动填写并保存：\n'+m[1]);}else showSimpleModal('生成失败',out||'静态测速地址生成超时');}}).catch(function(){});},1000);}).catch(function(e){btn.disabled=false;btn.textContent='生成静态测速地址';showSimpleModal('生成失败',String(e));});};box.appendChild(btn);box.appendChild(progress);return box;
 }
 
 function saveToken(kind) {

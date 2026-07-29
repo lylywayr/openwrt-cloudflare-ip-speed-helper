@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cfg(){ uci -q get "cf_ip_speed_client.main.$1" 2>/dev/null || true; }
-work=/tmp/cf-ip-speed-client; dir="$work/publish"; mkdir -p "$dir"; rm -f "$dir"/*
+work=/tmp/cf-ip-speed-client; dir="$work/publish"; mkdir -p "$dir"; rm -rf "$dir"/*
 all="$dir/ADD.txt"; : > "$all"
 for cache in /etc/cf-ip-speed-client/cache-v4.txt /etc/cf-ip-speed-client/cache-v6.txt; do
  [ -f "$cache" ] || continue
@@ -10,21 +10,26 @@ done
 [ -s "$dir/raw" ] || { echo '没有可部署的优选结果，请先执行优选'; exit 1; }
 sort -t'|' -k1,1n -k2,2 -u "$dir/raw" > "$dir/sorted"; cut -d'|' -f2 "$dir/sorted" > "$all"; ports=$(cut -d'|' -f1 "$dir/sorted"|sort -n -u)
 for p in $ports; do awk -F'|' -v p="$p" '$1==p{print $2}' "$dir/sorted" > "$dir/ADD-$p.txt"; done
-rm -f "$dir/raw" "$dir/sorted"; printf '%s\n' '<!doctype html><meta charset="utf-8"><title>CF IP Results</title><a href="ADD.txt">ADD.txt</a>' > "$dir/index.html"
+rm -f "$dir/raw" "$dir/sorted"
+# Pages static speed asset: a deterministic 10 MiB file avoids Workers request quotas.
+# It is regenerated locally at each Pages publish and served as a cached static asset.
+mkdir -p "$dir/__speed"
+dd if=/dev/zero of="$dir/__speed/10m.bin" bs=1048576 count=10 2>/dev/null
+printf '%s\n' '<!doctype html><meta charset="utf-8"><title>CF IP Results</title><a href="ADD.txt">ADD.txt</a>' > "$dir/index.html"
 platform=$(cfg deploy_platform); mainfile=$(cfg deploy_filename); [ -n "$mainfile" ] || mainfile=ADD.txt; [ "$mainfile" = ADD.txt ] || cp "$all" "$dir/$mainfile"
 case "$platform" in
 github)
- token=$(cfg github_token); repo=$(cfg deploy_repo); branch=$(cfg deploy_branch); [ -n "$branch" ] || branch=main; [ -n "$token" ]&&[ -n "$repo" ] || { echo 'GitHub 配置不完整'; exit 1; }
+ [ "$(cfg github_deploy_consent)" = "1" ] || { echo '未获得 GitHub 部署授权'; exit 1; }; token=$(cfg github_token); repo=$(cfg deploy_repo); branch=$(cfg deploy_branch); [ -n "$branch" ] || branch=main; [ -n "$token" ]&&[ -n "$repo" ] || { echo 'GitHub 配置不完整'; exit 1; }
  if echo "$repo"|grep -q /;then full="$repo";else user=$(curl -fsS -H "Authorization: Bearer $token" https://api.github.com/user|sed -n 's/.*"login":"\([^"]*\)".*/\1/p'|head -1);full="$user/$repo";fi
  [ -n "$full" ]||{ echo 'GitHub Token 无效';exit 1; }; for f in "$dir"/*.txt;do n=$(basename "$f");b=$(openssl enc -base64 -A <"$f");old=$(curl -s -H "Authorization: Bearer $token" "https://api.github.com/repos/$full/contents/$n?ref=$branch");sha=$(printf %s "$old"|tr ',' '\n'|awk -F'"' '/"sha"/{print $4;exit}');body="{\"message\":\"update CF IP results\",\"branch\":\"$branch\",\"content\":\"$b\"";[ -z "$sha" ]||body="$body,\"sha\":\"$sha\"";curl -fsS -X PUT -H "Authorization: Bearer $token" -H 'Content-Type: application/json' "https://api.github.com/repos/$full/contents/$n" -d "$body}" >/dev/null;done; base="https://raw.githubusercontent.com/$full/$branch"
  ;;
 cloudflare)
- token=$(cfg cf_pages_api_token); aid=$(cfg cf_pages_account_id); project=$(cfg cf_pages_project); mode=$(cfg cf_pages_domain_mode); zone=$(cfg cf_pages_zone); sub=$(cfg cf_pages_subdomain); key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email); [ -n "$project" ] || { echo 'Pages 项目名未填写'; exit 1; }; if [ -z "$token" ]; then [ "$(cfg cf_pages_token_consent)" = "1" ] || { echo '请先在前端勾选授权创建 Pages 发布 Token，或自行输入 Token'; exit 1; }; /usr/bin/cf-ip-speed-pages-token-create || exit 1; token=$(cfg cf_pages_api_token); aid=$(cfg cf_pages_account_id); fi; if [ -z "$aid" ] && [ -n "$key" ] && [ -n "$email" ]; then aid=$(curl -fsS -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" https://api.cloudflare.com/client/v4/accounts | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1); [ -n "$aid" ] && { uci set "cf_ip_speed_client.main.cf_pages_account_id=$aid"; uci commit cf_ip_speed_client; }; fi; [ -n "$token" ]&&[ -n "$aid" ] || { echo 'Pages 发布 Token 或账户信息不可用';exit 1; }; command -v wrangler >/dev/null 2>&1||{ echo 'Wrangler 未安装';exit 1; }
+ [ "$(cfg cf_pages_token_consent)" = "1" ] || { echo '未获得 Cloudflare Pages 部署授权'; exit 1; }; token=$(cfg cf_pages_api_token); aid=$(cfg cf_pages_account_id); project=$(cfg cf_pages_project); mode=$(cfg cf_pages_domain_mode); zone=$(cfg cf_pages_zone); sub=$(cfg cf_pages_subdomain); key=$(cfg cloudflare_global_api_key); email=$(cfg cloudflare_email); [ -n "$project" ] || { echo 'Pages 项目名未填写'; exit 1; }; if [ -z "$token" ]; then [ "$(cfg cf_pages_token_consent)" = "1" ] || { echo '请先在前端勾选授权创建 Pages 发布 Token，或自行输入 Token'; exit 1; }; /usr/bin/cf-ip-speed-pages-token-create || exit 1; [ "$(cfg cf_pages_token_consent)" = "1" ] || { echo '未获得 Cloudflare Pages 部署授权'; exit 1; }; token=$(cfg cf_pages_api_token); aid=$(cfg cf_pages_account_id); fi; if [ -z "$aid" ] && [ -n "$key" ] && [ -n "$email" ]; then aid=$(curl -fsS -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" https://api.cloudflare.com/client/v4/accounts | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1); [ -n "$aid" ] && { uci set "cf_ip_speed_client.main.cf_pages_account_id=$aid"; uci commit cf_ip_speed_client; }; fi; [ -n "$token" ]&&[ -n "$aid" ] || { echo 'Pages 发布 Token 或账户信息不可用';exit 1; }; command -v wrangler >/dev/null 2>&1||{ echo 'Wrangler 未安装';exit 1; }
  if [ "$mode" = custom ]; then [ -n "$zone" ]&&[ -n "$sub" ]&&[ -n "$key" ]&&[ -n "$email" ] || { echo '自定义域名配置不完整'; exit 1; }; domain="$sub.$zone"; curl -sS --connect-timeout 15 --max-time 60 -X POST -H "X-Auth-Email: $email" -H "X-Auth-Key: $key" -H 'Content-Type: application/json' "https://api.cloudflare.com/client/v4/accounts/$aid/pages/projects/$project/domains" -d "{\"name\":\"$domain\"}" >/dev/null 2>&1 || true; fi
  CLOUDFLARE_API_TOKEN="$token" CLOUDFLARE_ACCOUNT_ID="$aid" wrangler pages deploy "$dir" --project-name "$project" --branch main >/tmp/cf-ip-speed-client/wrangler-deploy.log 2>&1 || { sed -E 's/(api[_ -]?token|authorization)[^ ]*/[敏感信息已隐藏]/Ig' /tmp/cf-ip-speed-client/wrangler-deploy.log; exit 1; }
  deploy_url=$(sed -n 's/.*https:\/\/\([^ ]*\.pages\.dev\).*/https:\/\/\1/p' /tmp/cf-ip-speed-client/wrangler-deploy.log | tail -1); [ -n "$deploy_url" ] || { echo 'Pages 未返回部署地址'; exit 1; }
- for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done);do code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$deploy_url/$f"||true); [ "$code" = 200 ] || { echo "Pages 预览校验失败：$f HTTP $code";exit 1;};done
- if [ "$mode" = custom ]; then base="https://$domain"; for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done);do ok=0;for wait in 0 3 8 15;do [ "$wait" = 0 ]||sleep "$wait";code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$base/$f"||true);[ "$code" = 200 ]&&{ ok=1;break;};done;[ "$ok" = 1 ]||{ echo "自定义域名校验失败：$f HTTP $code";exit 1;};done; else base="https://$project.pages.dev"; fi
+ for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done) __speed/10m.bin;do code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$deploy_url/$f"||true); [ "$code" = 200 ] || { echo "Pages 预览校验失败：$f HTTP $code";exit 1;};done
+ if [ "$mode" = custom ]; then base="https://$domain"; for f in ADD.txt $(for p in $ports;do echo ADD-$p.txt;done) __speed/10m.bin;do ok=0;for wait in 0 3 8 15;do [ "$wait" = 0 ]||sleep "$wait";code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 "$base/$f"||true);[ "$code" = 200 ]&&{ ok=1;break;};done;[ "$ok" = 1 ]||{ echo "自定义域名校验失败：$f HTTP $code";exit 1;};done; else base="https://$project.pages.dev"; fi
  ;;
 *) echo '未配置部署平台';exit 1;;
 esac
