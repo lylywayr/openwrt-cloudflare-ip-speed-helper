@@ -1158,6 +1158,31 @@ build_priority_ip_file() {
 	mv "${target_ip_file}.dedup" "$target_ip_file"
 }
 
+preflight_speed_source() {
+ url="$(cfg test_url "$DEFAULT_TEST_URL")"; out="$(curl -kLsS -o /dev/null -w '%{http_code} %{size_download}' --connect-timeout 15 --max-time 75 "$url" 2>/dev/null || true)"
+ code="$(printf '%s' "$out"|awk '{print $1}')"; size="$(printf '%s' "$out"|awk '{print $2}')"
+ [ "$code" = 200 ] && [ "${size:-0}" -ge 1048576 ] 2>/dev/null || { set_status error "测速源不可用：HTTP ${code:-000}，未开始优选"; log "speed source preflight failed: $url HTTP=${code:-000} bytes=${size:-0}"; return 1; }
+ log "speed source preflight ok: 10MiB static asset"; return 0
+}
+measure_with_retry() {
+ ip_version="$1"; ip="$2"; port="$3"; first="$(measure_target_meta "$ip_version" "$ip" "$port" || true)"
+ speed="$(printf '%s' "$first"|awk -F'\t' '{print $1}')"
+ if [ -n "$speed" ] && awk -v x="$speed" 'BEGIN{exit !(x+0>0)}'; then printf '%s\n' "$first"; return 0; fi
+ sleep 3
+ second="$(measure_target_meta "$ip_version" "$ip" "$port" || true)"; printf '%s\n' "$second"
+}
+measure_one_candidate() {
+ ip_version="$1"; cip="$2"; cf_port="$3"; clat="$4"; ccolo="$5"; idx="$6"; total="$7"; out="$8"
+ start_country="$(colo_country "$ccolo")"; [ -n "$start_country" ] || start_country="-"
+ log "测速开始 [$idx/$total] $cip:$cf_port ${ccolo:-N/A}/${start_country}"
+ meta="$(measure_with_retry "$ip_version" "$cip" "$cf_port" || true)"; oldifs="$IFS"; IFS="$(printf '\t')"; read -r spd gotcolo country city <<EOF
+$meta
+EOF
+ IFS="$oldifs"; spd="${spd:-0.00}"; [ -n "${gotcolo:-}" ] && [ "$gotcolo" != N/A ] || gotcolo="$ccolo"; country="${country:-}"; [ -n "$country" ] || country="$(colo_country "$gotcolo")"; [ -n "$country" ] || country="-"
+ # A speed of zero is retained as a measured low/failed record; retry already ran.
+ printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s\n' "$cip" "$clat" "$spd" "$gotcolo" "$cf_port" "$country" "$(date '+%Y-%m-%d %H:%M:%S')" > "$out"
+ log "测速完成 [$idx/$total] $cip:$cf_port ${gotcolo:-N/A}/${country} ${spd}MB/s"
+}
 run_cfst_for_version() {
 	ip_version="$1"; result_file="$2"; test_ports="$3"; label="$(version_label "$ip_version")"
 	source_ip_file="$(ip_file_for_version "$ip_version")"; manual_file="$(manual_file_for_version "$ip_version")"; cache_file="$(cache_file_for_version "$ip_version")"
@@ -1168,49 +1193,65 @@ run_cfst_for_version() {
 	for cf_port in $test_ports; do
 		latency_csv="${WORKDIR}/latency-${ip_version}-${cf_port}.csv"; selected_csv="${WORKDIR}/selected-${ip_version}-${cf_port}.csv"; jobs_dir="${WORKDIR}/jobs-${ip_version}-${cf_port}"
 		rm -rf "$jobs_dir"; mkdir -p "$jobs_dir"
-		log "${label} 端口 ${cf_port}：仅 HKG/LAX/SJC，丢包 0、每机房延迟前 10"
-		set_status running "${label} 端口 ${cf_port} 正在延迟初筛（HKG/LAX/SJC）"
+		log "${label} 端口 ${cf_port}：仅 HKG/NRT/HND/KIX/SIN/LAX/SJC/SFO/SEA，丢包 0、每机房延迟前 5"
+		set_status running "${label} 端口 ${cf_port} 正在延迟初筛（9 个目标机房）"
 		# HTTPing lets cfst filter by the actual serving Colo during the latency pass.
-		if ! cfst -n 60 -t 4 -dn 0 -dd -httping -cfcolo HKG,LAX,SJC -tlr 0 -tp "$cf_port" -f "$run_source_file" -url "$test_url" -o "$latency_csv" -p 0 >> "$CFST_LOG" 2>&1; then log "${label} 端口 ${cf_port} 延迟初筛失败"; continue; fi
+		if ! cfst -n 60 -t 4 -dn 0 -dd -httping -cfcolo HKG,NRT,HND,KIX,SIN,LAX,SJC,SFO,SEA -tlr 0 -tp "$cf_port" -f "$run_source_file" -url "$test_url" -o "$latency_csv" -p 0 >> "$CFST_LOG" 2>&1; then log "${label} 端口 ${cf_port} 延迟初筛失败"; continue; fi
 		if [ ! -s "$latency_csv" ]; then
 			log "${label} 端口 ${cf_port} 延迟结果文件为空，跳过"
 			continue
 		fi
-		# Drop the CSV header before sorting. Then keep zero-loss candidates, grouped by colo,
-		# with the lowest ten latencies per group.
-		awk -F',' 'NR>1 && $4+0==0' "$latency_csv" | sort -t, -k7,7 -k5,5n | awk -F',' '{c=($7==""?"N/A":$7);if(++n[c]<=10)print}' > "$selected_csv"
+		# Drop the CSV header; keep zero-loss candidates grouped by target Colo,
+		# with the five lowest-latency candidates per Colo.
+		awk -F',' 'NR>1 && $4+0==0' "$latency_csv" | sort -t, -k7,7 -k5,5n | awk -F',' '{c=($7==""?"N/A":$7);if(++n[c]<=5)print}' > "$selected_csv"
 		total="$(wc -l < "$selected_csv" | tr -d ' ')"; [ "$total" -gt 0 ] 2>/dev/null || { log "${label} 端口 ${cf_port} 无丢包为 0 的候选"; continue; }
-		log "${label} 端口 ${cf_port}：已选 ${total} 个候选（每机房最多 10），单线程下载测速"
-		set_status running "${label} 端口 ${cf_port} 下载测速：${total} 个候选，单线程"
-		i=0; while IFS=',' read -r cip csent crecv closs clat cspeed ccolo; do
+		# Two download workers: small enough to limit bandwidth contention while cutting runtime.
+		log "${label} 端口 ${cf_port}：已选 ${total} 个候选（每机房最多 5），双线程下载测速"
+		set_status running "${label} 端口 ${cf_port} 下载测速：${total} 个候选，双线程"
+		# Batches of two: exactly two simultaneous downloads, then wait before next pair.
+		i=0; active=0; pids=""
+		while IFS=',' read -r cip csent crecv closs clat cspeed ccolo; do
 			[ -n "$cip" ] || continue; i=$((i+1))
-			# Sequential measurement is deliberate: concurrent requests compete for the
-			# same WAN bandwidth and distort each candidate's measured download speed.
-			start_country="$(colo_country "$ccolo")"; [ -n "$start_country" ] || start_country="-"
-			log "测速开始 [$i/$total] $cip:$cf_port ${ccolo:-N/A}/${start_country}"
-			meta="$(measure_target_meta "$ip_version" "$cip" "$cf_port" || true)"; oldifs="$IFS"; IFS="$(printf '\t')"; read -r spd gotcolo country city <<EOF
-$meta
-EOF
-			IFS="$oldifs"; spd="${spd:-0.00}"
-			[ -n "${gotcolo:-}" ] && [ "${gotcolo:-}" != "N/A" ] || gotcolo="$ccolo"
-			country="${country:-}"; [ -n "$country" ] || country="$(colo_country "$gotcolo")"
-			[ -n "$country" ] || country="-"
-			printf '%s,0,,cfst,%s,%s,%s,%s,%s,,%s\n' "$cip" "$clat" "$spd" "$gotcolo" "$cf_port" "$country" "$(date '+%Y-%m-%d %H:%M:%S')" > "$jobs_dir/$i.ok"
-			log "测速完成 [$i/$total] $cip:$cf_port ${gotcolo:-N/A}/${country} ${spd}MB/s"
+			measure_one_candidate "$ip_version" "$cip" "$cf_port" "$clat" "$ccolo" "$i" "$total" "$jobs_dir/$i.ok" &
+			pids="$pids $!"; active=$((active+1))
+			if [ "$active" -ge 2 ]; then for pid in $pids; do wait "$pid"; done; active=0; pids=""; fi
 		done < "$selected_csv"
-		wait
+		for pid in $pids; do wait "$pid"; done
 		cat "$jobs_dir"/*.ok 2>/dev/null >> "$all_merged" || true
 		[ -s "$all_merged" ] && found_any=1
 	done
 	rm -f "$run_source_file"
 	if [ "$found_any" = 0 ]; then set_status error "${label} 优选未产出达标结果"; return 1; fi
 	sort -t, -k6 -rn "$all_merged" | head -n "$MEASURE_TOP_N" > "$result_file"; rm -f "$all_merged"
-	: > "$cache_file"
-	awk -F',' -v limit="$CACHE_FILL_TOP_N" 'NR<=limit { printf "%s,%s,%s,%s,%s,0,0,%s,%s,%s\n",$1,$8,$7,$9,$4,$6,$5,$11 }' "$result_file" > "$cache_file"
-	save_result_state "$ip_version" "$result_file"; normalize_cache_file "$ip_version"; sync_manual_file_with_cache "$ip_version"; log "${label} completed: $result_file"; return 0
+	# Incremental composite cache: one best port per IP, preserve untested cache records.
+	tmp_cache="${cache_file}.next"; cp "$cache_file" "$tmp_cache" 2>/dev/null || : > "$tmp_cache"
+	while IFS=',' read -r rip rz rcity rsrc rlat rspd rcolo rport rcountry _ rtime; do
+		[ -n "$rip" ] || continue
+		newrec="$(make_cache_record "$rip" "$rport" "$rcolo" "$rcountry" "cfst" "0" "0" "$rspd" "$rlat" "$rtime")"
+		oldrec="$(awk -F',' -v x="$rip" '$1==x{print;exit}' "$tmp_cache")"
+		if [ -z "$oldrec" ]; then printf '%s\n' "$newrec" >> "$tmp_cache"; else
+			oldspd="$(printf '%s' "$oldrec"|cut -d, -f8)"; oldlat="$(printf '%s' "$oldrec"|cut -d, -f9)"
+			if compare_better "$rspd" "$rlat" "$oldspd" "$oldlat"; then awk -F',' -v x="$rip" '$1!=x' "$tmp_cache" > "${tmp_cache}.x"; mv "${tmp_cache}.x" "$tmp_cache"; printf '%s\n' "$newrec" >> "$tmp_cache"; fi
+		fi
+	done < "$result_file"
+	# Cap composite cache at 200 IPs after quality sort.
+	mv "$tmp_cache" "$cache_file"; normalize_cache_file "$ip_version"; head -n 200 "$cache_file" > "${cache_file}.cap"; mv "${cache_file}.cap" "$cache_file"
+	save_result_state "$ip_version" "$result_file"; sync_manual_file_with_cache "$ip_version"; log "${label} completed: $result_file"; return 0
 }
 
+select_run_mode() {
+ requested="${1:-auto}"; now=$(date +%s); last_full="$(cfg last_full_run_epoch 0)"; [ -n "$last_full" ] || last_full=0
+ case "$requested" in full|cache) echo "$requested"; return;; esac
+ # force full after a test URL change or once a week; otherwise refresh composite cache.
+ oldurl="$(cfg last_test_url '')"; cururl="$(cfg test_url "$DEFAULT_TEST_URL")"
+ if [ "$oldurl" != "$cururl" ] || [ $((now-last_full)) -ge 604800 ]; then echo full; else echo cache; fi
+}
+prepare_cache_source() {
+ ver="$1"; out="$2"; cache="$(cache_file_for_version "$ver")"; : > "$out"
+ [ -f "$cache" ] && awk -F',' '$1!="" && $6<10 {print $1}' "$cache" | awk '!seen[$0]++' > "$out"
+}
 run_once() {
+	run_mode="$(select_run_mode "${1:-auto}")"
 	require_command cfst
 	require_command awk
 	require_command ip
@@ -1221,6 +1262,7 @@ run_once() {
 	[ "$enabled" = "1" ] || exit 0
 
 	ensure_cache_dirs
+	preflight_speed_source || exit 1
 	normalize_cache_file v4
 	normalize_cache_file v6
 	normalize_manual_file v4
@@ -1231,6 +1273,9 @@ run_once() {
 	custom_ports="$(cfg custom_ports)"
 	test_ports="$(resolve_test_ports "$custom_ports" "$include_443")"
 	result_file="$(cfg result_file "$DEFAULT_RESULT_FILE")"
+	cache_source="${WORKDIR}/cache-refresh-source.txt"
+	if [ "$run_mode" = cache ]; then prepare_cache_source v4 "$cache_source"; [ -s "$cache_source" ] || { log "cache refresh requested but cache empty; switching full"; run_mode=full; }; fi
+	log "run mode: $run_mode"
 
 	case "$ip_mode" in
 		v4) test_versions="v4" ;;
@@ -1268,15 +1313,18 @@ run_once() {
 	success_any=0
 	for ip_version in $test_versions; do
 		target_result="$(result_file_for_version "$result_file" "$ip_version")"
-		log "stage 2/3 start: testing $(version_label "$ip_version")"
+		log "stage 2/3 start: testing $(version_label "$ip_version") mode=$run_mode"
+		if [ "$run_mode" = cache ] && [ "$ip_version" = v4 ]; then original_ip="$IP_FILE"; IP_FILE="$cache_source"; fi
 		if run_cfst_for_version "$ip_version" "$target_result" "$test_ports"; then
 			success_any=1
 		fi
+		[ "${original_ip:-}" = "" ] || IP_FILE="$original_ip"
 	done
 
 	restore_proxy_services
 
 	if [ "$success_any" -eq 1 ]; then
+		[ "$run_mode" != full ] || { uci set "${CONFIG}.${SECTION}.last_full_run_epoch=$(date +%s)"; uci set "${CONFIG}.${SECTION}.last_test_url=$(cfg test_url "$DEFAULT_TEST_URL")"; uci commit "$CONFIG"; }
 		sync_edgetunnel_add || log "edgetunnel sync finished with error"
 		set_status "ok" "本轮优选完成，代理已恢复：模式 ${ip_mode}，端口 ${test_ports}"
 		log "stage 3/3 complete: results saved, proxies restored"
@@ -1371,6 +1419,7 @@ run_downstream_only() {
 	}
 
 	ensure_cache_dirs
+	preflight_speed_source || exit 1
 	normalize_cache_file v4
 	normalize_cache_file v6
 	set_status "running" "${resume_label} 续跑中：使用现有 cfst 结果"
@@ -1471,7 +1520,9 @@ install_cron() {
 }
 
 case "${1:-run}" in
-	run) run_once ;;
+	run) run_once "${2:-auto}" ;;
+	full) run_once full ;;
+	cache) run_once cache ;;
 	run-background) run_background ;;
 	stop-background) stop_background ;;
 	run-downstream) run_downstream_only "${2:-v4}" "${3:-}" ;;
