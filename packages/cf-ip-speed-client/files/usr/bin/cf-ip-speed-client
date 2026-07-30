@@ -1234,6 +1234,19 @@ run_cfst_for_version() {
 			if compare_better "$rspd" "$rlat" "$oldspd" "$oldlat"; then awk -F',' -v x="$rip" '$1!=x' "$tmp_cache" > "${tmp_cache}.x"; mv "${tmp_cache}.x" "$tmp_cache"; printf '%s\n' "$newrec" >> "$tmp_cache"; fi
 		fi
 	done < "$result_file"
+	# Apply failed-measurement accounting. Two failed attempts increment once; success resets it.
+	cat "$jobs_dir"/*.ok 2>/dev/null > "${jobs_dir}/all.records" || :
+	while IFS=',' read -r rip rz rcity rsrc rlat rspd rcolo rport rcountry rfail rtime; do
+		[ -n "$rip" ] || continue; oldrec="$(awk -F',' -v x="$rip" '$1==x{print;exit}' "$tmp_cache")"; oldfail="$(printf '%s' "$oldrec"|cut -d, -f6)"; [ -n "$oldfail" ] || oldfail=0
+		if [ "${rfail:-0}" = 1 ]; then nf=$((oldfail+1)); else nf=0; fi
+		if [ "$nf" -ge 10 ]; then awk -F',' -v x="$rip" '$1!=x' "$tmp_cache" > "${tmp_cache}.x"; mv "${tmp_cache}.x" "$tmp_cache"; log "dropping cache after 10 failures: $rip"; continue; fi
+		newrec="$(make_cache_record "$rip" "$rport" "$rcolo" "$rcountry" "cfst" "$nf" "0" "$rspd" "$rlat" "$rtime")"
+		awk -F',' -v x="$rip" '$1!=x' "$tmp_cache" > "${tmp_cache}.x"; mv "${tmp_cache}.x" "$tmp_cache"; printf '%s\n' "$newrec" >> "$tmp_cache"
+	done < "${jobs_dir}/all.records"
+	# Speed baseline: two rounds below half baseline set low_speed_rounds for next auto run.
+	curavg="$(awk -F',' 'NF{sum+=$6;n++}END{if(n)printf "%.2f",sum/n;else print 0}' "$result_file")"; baseavg="$(cfg speed_baseline_mb 0)"
+	if awk -v c="$curavg" -v b="$baseavg" 'BEGIN{exit !(b>0 && c < b*0.5)}'; then low=$(( $(cfg low_speed_rounds 0) + 1 )); else low=0; fi
+	uci set "${CONFIG}.${SECTION}.low_speed_rounds=$low"; uci set "${CONFIG}.${SECTION}.speed_baseline_mb=$curavg"; uci commit "$CONFIG"; log "speed baseline: current=${curavg}MB/s previous=${baseavg}MB/s low_rounds=$low"
 	# Cap composite cache at 200 IPs after quality sort.
 	mv "$tmp_cache" "$cache_file"; normalize_cache_file "$ip_version"; head -n 200 "$cache_file" > "${cache_file}.cap"; mv "${cache_file}.cap" "$cache_file"
 	save_result_state "$ip_version" "$result_file"; sync_manual_file_with_cache "$ip_version"; log "${label} completed: $result_file"; return 0
@@ -1242,9 +1255,19 @@ run_cfst_for_version() {
 select_run_mode() {
  requested="${1:-auto}"; now=$(date +%s); last_full="$(cfg last_full_run_epoch 0)"; [ -n "$last_full" ] || last_full=0
  case "$requested" in full|cache) echo "$requested"; return;; esac
- # force full after a test URL change or once a week; otherwise refresh composite cache.
  oldurl="$(cfg last_test_url '')"; cururl="$(cfg test_url "$DEFAULT_TEST_URL")"
- if [ "$oldurl" != "$cururl" ] || [ $((now-last_full)) -ge 604800 ]; then echo full; else echo cache; fi
+ reason=""
+ [ "$oldurl" = "$cururl" ] || reason="测速地址变化"
+ [ -n "$reason" ] || [ $((now-last_full)) -lt 604800 ] || reason="距上次全量已超过7天"
+ cache="$CACHE_V4_FILE"; total=$(awk 'NF{n++}END{print n+0}' "$cache" 2>/dev/null)
+ valid=$(awk -F',' 'NF && $6<10 && $8+0>0 {n++}END{print n+0}' "$cache" 2>/dev/null)
+ [ -n "$reason" ] || [ "$valid" -ge 5 ] || reason="有效缓存节点不足5个"
+ failpct=$(awk -F',' 'NF{n++;if($6>0)f++}END{if(n)printf "%d",f*100/n;else print 100}' "$cache" 2>/dev/null)
+ [ -n "$reason" ] || [ "$failpct" -lt 30 ] || reason="缓存失败率${failpct}%"
+ # Two consecutive documented speed collapses trigger rediscovery.
+ low=$(cfg low_speed_rounds 0); [ -n "$low" ] || low=0
+ [ -n "$reason" ] || [ "$low" -lt 2 ] || reason="连续两轮速度下降"
+ if [ -n "$reason" ]; then log "force full discovery: $reason"; echo full; else echo cache; fi
 }
 prepare_cache_source() {
  ver="$1"; out="$2"; cache="$(cache_file_for_version "$ver")"; : > "$out"
