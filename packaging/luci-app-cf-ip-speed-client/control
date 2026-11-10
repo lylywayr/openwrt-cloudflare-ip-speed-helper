@@ -1,7 +1,7 @@
 Package: luci-app-cf-ip-speed-client
 Version: @VERSION@
 Depends: libc, cf-ip-speed-client, luci-base
-License: MIT
+License: BSD-3-Clause
 Section: luci
 Architecture: all
 Maintainer: lylywayr <lylywayr@users.noreply.github.com>

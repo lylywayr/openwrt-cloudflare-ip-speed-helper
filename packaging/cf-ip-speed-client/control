@@ -1,7 +1,7 @@
 Package: cf-ip-speed-client
 Version: @VERSION@
 Depends: libc, curl, ca-bundle, ip-full, jsonfilter, openssl-util
-License: MIT
+License: BSD-3-Clause
 Section: net
 Architecture: all
 Maintainer: lylywayr <lylywayr@users.noreply.github.com>

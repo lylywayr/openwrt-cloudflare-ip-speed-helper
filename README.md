@@ -298,4 +298,4 @@ rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
 
 ## 许可
 
-[MIT](LICENSE)
+[BSD 3-Clause](LICENSE)：分发时必须保留原作者（lylywayr）署名，且不得用原作者名义为衍生品背书。
