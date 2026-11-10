@@ -1,6 +1,7 @@
 config client 'main'
 	option enabled '0'
 	option ip_mode 'dual'
+	option colo_filter 'HKG,LAX,SJC'
 	option include_443 '1'
 	option custom_ports ''
 	option test_url 'https://speed.cloudflare.com/__down?bytes=10485760'

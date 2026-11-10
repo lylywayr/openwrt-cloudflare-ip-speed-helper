@@ -178,6 +178,7 @@ install_cfst() {
 apply_defaults() {
   uci -q get cf_ip_speed_client.main.enabled >/dev/null || uci set cf_ip_speed_client.main.enabled='0'
   uci -q get cf_ip_speed_client.main.ip_mode >/dev/null || uci set cf_ip_speed_client.main.ip_mode='dual'
+  uci -q get cf_ip_speed_client.main.colo_filter >/dev/null || uci set cf_ip_speed_client.main.colo_filter='HKG,LAX,SJC'
   uci -q get cf_ip_speed_client.main.include_443 >/dev/null || uci set cf_ip_speed_client.main.include_443='1'
   uci -q get cf_ip_speed_client.main.custom_ports >/dev/null || uci set cf_ip_speed_client.main.custom_ports=''
   uci -q get cf_ip_speed_client.main.test_url >/dev/null || uci set cf_ip_speed_client.main.test_url=''

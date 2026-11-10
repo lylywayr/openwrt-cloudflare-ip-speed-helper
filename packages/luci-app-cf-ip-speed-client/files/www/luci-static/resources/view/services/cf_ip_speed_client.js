@@ -586,6 +586,12 @@ o.rmempty = false;
     	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
 o.rmempty = true;
 
+    o = s.taboption('basic', form.Value, 'colo_filter', '机房过滤');
+    o.placeholder = 'HKG,LAX,SJC';
+    o.description = '限制延迟初筛的 Cloudflare 机房，多个用英文逗号分隔（如 HKG,LAX,SJC,NRT）；留空表示不过滤、全球机房参与优选。';
+    	o.onchange = function(s) { this.map.save(function() { fs.exec('/usr/bin/cf-ip-speed-uci', ['commit', 'cf_ip_speed_client']).catch(function() {}); }); };
+o.rmempty = true;
+
     o = s.taboption('basic', form.Value, 'test_url', '自定义测速地址');
     o.placeholder = 'https://speed.example.com/__down';
     o.description = '可手动填写测速下载地址；<a href="/luci-static/resources/cf-ip-speed-client/custom-speed-test-tutorial.html" target="_blank">如何创建自定义测速地址？</a>';
